@@ -16,6 +16,7 @@ def build_tab() -> ChromeTab:
     return ChromeTab(
         tab_id="stable-1",
         stable_key="stable-1",
+        fingerprint_key="fingerprint-1",
         window_index=1,
         tab_index=1,
         title="Clinical trial result",
@@ -78,3 +79,34 @@ def test_pipeline_run_journaling_marks_interrupted(tmp_path: Path) -> None:
     assert len(runs) == 1
     assert runs[0].run_id == run_id
     assert runs[0].status == StageStatus.interrupted
+
+
+def test_missing_content_ignores_duplicates(tmp_path: Path) -> None:
+    cache = SQLiteCache(tmp_path / "cache.sqlite3")
+    discovered_at = datetime.now(UTC)
+    canonical = ChromeTab(
+        tab_id="stable-1",
+        stable_key="stable-1",
+        fingerprint_key="fingerprint-1",
+        window_index=1,
+        tab_index=1,
+        title="Duplicate page",
+        url="https://example.com/page",
+        domain="example.com",
+        discovered_at=discovered_at,
+    )
+    duplicate = ChromeTab(
+        tab_id="stable-2",
+        stable_key="stable-2",
+        fingerprint_key="fingerprint-1",
+        window_index=1,
+        tab_index=2,
+        title="Duplicate page",
+        url="https://example.com/page",
+        domain="example.com",
+        discovered_at=discovered_at,
+        duplicate_of_tab_id="stable-1",
+    )
+    cache.upsert_tabs([canonical, duplicate])
+    pending = cache.get_tabs_missing_content()
+    assert [tab.tab_id for tab in pending] == ["stable-1"]

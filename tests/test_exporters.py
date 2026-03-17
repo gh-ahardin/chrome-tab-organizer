@@ -18,6 +18,7 @@ def sample_record() -> PipelineTabRecord:
     tab = ChromeTab(
         tab_id="stable-1",
         stable_key="stable-1",
+        fingerprint_key="fingerprint-1",
         window_index=1,
         tab_index=1,
         title="Example title",

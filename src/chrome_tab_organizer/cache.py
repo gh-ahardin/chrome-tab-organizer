@@ -49,6 +49,7 @@ class SQLiteCache:
                 CREATE TABLE IF NOT EXISTS tabs (
                     tab_id TEXT PRIMARY KEY,
                     stable_key TEXT NOT NULL,
+                    fingerprint_key TEXT NOT NULL DEFAULT '',
                     window_index INTEGER NOT NULL,
                     tab_index INTEGER NOT NULL,
                     title TEXT NOT NULL,
@@ -57,6 +58,7 @@ class SQLiteCache:
                     discovered_at TEXT NOT NULL,
                     first_seen_at TEXT,
                     last_seen_at TEXT,
+                    duplicate_of_tab_id TEXT,
                     status TEXT NOT NULL DEFAULT 'discovered',
                     last_error TEXT,
                     updated_at TEXT NOT NULL
@@ -101,8 +103,10 @@ class SQLiteCache:
         }
         expected = {
             "stable_key": "TEXT NOT NULL DEFAULT ''",
+            "fingerprint_key": "TEXT NOT NULL DEFAULT ''",
             "first_seen_at": "TEXT",
             "last_seen_at": "TEXT",
+            "duplicate_of_tab_id": "TEXT",
         }
         for name, column_type in expected.items():
             if name not in columns:
@@ -115,15 +119,17 @@ class SQLiteCache:
             conn.executemany(
                 """
                 INSERT INTO tabs (
-                    tab_id, stable_key, window_index, tab_index, title, url, domain, discovered_at,
-                    first_seen_at, last_seen_at, status, updated_at
+                    tab_id, stable_key, fingerprint_key, window_index, tab_index, title, url, domain,
+                    discovered_at, first_seen_at, last_seen_at, duplicate_of_tab_id, status, updated_at
                 )
                 VALUES (
-                    :tab_id, :stable_key, :window_index, :tab_index, :title, :url, :domain, :discovered_at,
-                    :first_seen_at, :last_seen_at, :status, :updated_at
+                    :tab_id, :stable_key, :fingerprint_key, :window_index, :tab_index, :title, :url,
+                    :domain, :discovered_at, :first_seen_at, :last_seen_at, :duplicate_of_tab_id,
+                    :status, :updated_at
                 )
                 ON CONFLICT(tab_id) DO UPDATE SET
                     stable_key=excluded.stable_key,
+                    fingerprint_key=excluded.fingerprint_key,
                     title=excluded.title,
                     url=excluded.url,
                     domain=excluded.domain,
@@ -132,12 +138,14 @@ class SQLiteCache:
                     tab_index=excluded.tab_index,
                     last_seen_at=excluded.last_seen_at,
                     first_seen_at=COALESCE(tabs.first_seen_at, excluded.first_seen_at),
+                    duplicate_of_tab_id=excluded.duplicate_of_tab_id,
                     updated_at=excluded.updated_at
                 """,
                 [
                     {
                         "tab_id": tab.tab_id,
                         "stable_key": tab.stable_key,
+                        "fingerprint_key": tab.fingerprint_key,
                         "window_index": tab.window_index,
                         "tab_index": tab.tab_index,
                         "title": tab.title,
@@ -146,6 +154,7 @@ class SQLiteCache:
                         "discovered_at": tab.discovered_at.isoformat(),
                         "first_seen_at": (tab.first_seen_at or tab.discovered_at).isoformat(),
                         "last_seen_at": (tab.last_seen_at or tab.discovered_at).isoformat(),
+                        "duplicate_of_tab_id": tab.duplicate_of_tab_id,
                         "status": TabStatus.discovered.value,
                         "updated_at": _utc_now(),
                     }
@@ -201,6 +210,7 @@ class SQLiteCache:
                 SELECT
                     t.tab_id,
                     t.stable_key,
+                    t.fingerprint_key,
                     t.window_index,
                     t.tab_index,
                     t.title,
@@ -209,6 +219,7 @@ class SQLiteCache:
                     t.discovered_at,
                     t.first_seen_at,
                     t.last_seen_at,
+                    t.duplicate_of_tab_id,
                     t.status,
                     ec.payload_json AS content_json,
                     e.payload_json AS enrichment_json
@@ -224,6 +235,7 @@ class SQLiteCache:
             tab = ChromeTab(
                 tab_id=row["tab_id"],
                 stable_key=row["stable_key"],
+                fingerprint_key=row["fingerprint_key"],
                 window_index=row["window_index"],
                 tab_index=row["tab_index"],
                 title=row["title"],
@@ -236,6 +248,7 @@ class SQLiteCache:
                 last_seen_at=(
                     datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
                 ),
+                duplicate_of_tab_id=row["duplicate_of_tab_id"],
             )
             content = (
                 ExtractedContent.model_validate(json.loads(row["content_json"]))
@@ -261,9 +274,10 @@ class SQLiteCache:
         with self.connect() as conn:
             query = """
                 SELECT tab_id, stable_key, window_index, tab_index, title, url, domain, discovered_at,
-                       first_seen_at, last_seen_at
+                       fingerprint_key, first_seen_at, last_seen_at, duplicate_of_tab_id
                 FROM tabs
                 WHERE tab_id NOT IN (SELECT tab_id FROM extracted_content)
+                  AND duplicate_of_tab_id IS NULL
             """
             params: tuple[object, ...] = ()
             if window_index is not None:
@@ -275,6 +289,7 @@ class SQLiteCache:
             ChromeTab(
                 tab_id=row["tab_id"],
                 stable_key=row["stable_key"],
+                fingerprint_key=row["fingerprint_key"],
                 window_index=row["window_index"],
                 tab_index=row["tab_index"],
                 title=row["title"],
@@ -287,6 +302,7 @@ class SQLiteCache:
                 last_seen_at=(
                     datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
                 ),
+                duplicate_of_tab_id=row["duplicate_of_tab_id"],
             )
             for row in rows
         ]
@@ -300,6 +316,7 @@ class SQLiteCache:
                 SELECT
                     t.tab_id,
                     t.stable_key,
+                    t.fingerprint_key,
                     t.window_index,
                     t.tab_index,
                     t.title,
@@ -308,11 +325,13 @@ class SQLiteCache:
                     t.discovered_at,
                     t.first_seen_at,
                     t.last_seen_at,
+                    t.duplicate_of_tab_id,
                     ec.payload_json
                 FROM tabs t
                 JOIN extracted_content ec ON ec.tab_id = t.tab_id
                 LEFT JOIN enrichments e ON e.tab_id = t.tab_id
                 WHERE e.tab_id IS NULL
+                  AND t.duplicate_of_tab_id IS NULL
             """
             params: tuple[object, ...] = ()
             if window_index is not None:
@@ -325,6 +344,7 @@ class SQLiteCache:
                 ChromeTab(
                     tab_id=row["tab_id"],
                     stable_key=row["stable_key"],
+                    fingerprint_key=row["fingerprint_key"],
                     window_index=row["window_index"],
                     tab_index=row["tab_index"],
                     title=row["title"],
@@ -337,6 +357,7 @@ class SQLiteCache:
                     last_seen_at=(
                         datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
                     ),
+                    duplicate_of_tab_id=row["duplicate_of_tab_id"],
                 ),
                 ExtractedContent.model_validate(json.loads(row["payload_json"])),
             )

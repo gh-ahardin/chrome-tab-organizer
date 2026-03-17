@@ -26,6 +26,7 @@ def test_rank_pages_orders_by_importance() -> None:
         ChromeTab(
             tab_id="a",
             stable_key="a",
+            fingerprint_key="fa",
             window_index=1,
             tab_index=1,
             title="Low",
@@ -36,6 +37,7 @@ def test_rank_pages_orders_by_importance() -> None:
         ChromeTab(
             tab_id="b",
             stable_key="b",
+            fingerprint_key="fb",
             window_index=1,
             tab_index=2,
             title="High",

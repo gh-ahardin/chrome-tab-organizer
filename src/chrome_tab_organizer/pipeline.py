@@ -33,11 +33,16 @@ class OrganizerPipeline:
         )
         tabs: list[ChromeTab] = []
         occurrence_counts: dict[str, int] = {}
+        canonical_ids: dict[str, str] = {}
         try:
             max_windows = get_chrome_window_count()
             target_windows = [window_index] if window_index is not None else list(range(1, max_windows + 1))
             for current_window in target_windows:
-                window_tabs = self._discover_window_with_retry(current_window, occurrence_counts)
+                window_tabs = self._discover_window_with_retry(
+                    current_window,
+                    occurrence_counts,
+                    canonical_ids,
+                )
                 if self.settings.max_tabs is not None:
                     remaining = self.settings.max_tabs - len(tabs)
                     window_tabs = window_tabs[: max(0, remaining)]
@@ -51,7 +56,8 @@ class OrganizerPipeline:
                 run_id,
                 details={"discovered_tabs": len(tabs), "window_index": window_index},
             )
-            logger.info("Discovered %s tabs", len(tabs))
+            unique_count = len([tab for tab in tabs if tab.duplicate_of_tab_id is None])
+            logger.info("Discovered %s tabs (%s unique)", len(tabs), unique_count)
             return tabs
         except Exception as exc:  # noqa: BLE001
             self.cache.fail_stage_run(
@@ -129,7 +135,8 @@ class OrganizerPipeline:
             records = self.cache.get_tab_records()
             if window_index is not None:
                 records = [record for record in records if record.tab.window_index == window_index]
-            complete_records = [record for record in records if record.enrichment]
+            unique_records = [record for record in records if record.tab.duplicate_of_tab_id is None]
+            complete_records = [record for record in unique_records if record.enrichment]
             topics = build_topic_groups(record.enrichment for record in complete_records if record.enrichment)
             top_pages = rank_pages(
                 tabs=[record.tab for record in complete_records],
@@ -168,11 +175,16 @@ class OrganizerPipeline:
         self,
         current_window: int,
         occurrence_counts: dict[str, int],
+        canonical_ids: dict[str, str],
     ) -> list[ChromeTab]:
         last_error: Exception | None = None
         for _ in range(max(1, self.settings.discovery_attempts)):
             try:
-                return discover_window_tabs(current_window, occurrence_counts=occurrence_counts)
+                return discover_window_tabs(
+                    current_window,
+                    occurrence_counts=occurrence_counts,
+                    canonical_ids=canonical_ids,
+                )
             except subprocess.CalledProcessError as exc:
                 last_error = exc
                 logger.warning("Window %s discovery failed, retrying: %s", current_window, exc)

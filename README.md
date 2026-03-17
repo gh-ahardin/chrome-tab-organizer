@@ -24,6 +24,7 @@ The MVP implemented here:
 - Caches tabs, extracted content, summaries, and topics in SQLite
 - Journals pipeline stages so interrupted runs are visible and recoverable
 - Uses stable tab keys so cache entries survive Chrome restarts better than raw window/tab positions
+- Ignores duplicate tabs for extraction, summarization, ranking, and bookmark export
 - Summarizes each page into structured records
 - Assigns tabs into topics and scores importance
 - Exports:
@@ -51,6 +52,7 @@ The MVP implemented here:
 - The tool does not close tabs.
 - The tool does not move tabs permanently.
 - During live session extraction it briefly activates tabs and then restores the previously active tab in that window.
+- Duplicate tabs of the same page are kept in the raw cache snapshot but only processed once.
 - If Chrome crashes mid-run, previously completed discovery, extraction, and summarization work remains in SQLite.
 - For unstable Chrome sessions, prefer running one window at a time with `--window-index`.
 

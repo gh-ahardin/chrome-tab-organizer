@@ -79,6 +79,7 @@ def discover_chrome_tabs() -> list[ChromeTab]:
 def discover_window_tabs(
     window_index: int,
     occurrence_counts: dict[str, int] | None = None,
+    canonical_ids: dict[str, str] | None = None,
 ) -> list[ChromeTab]:
     result = subprocess.run(
         ["osascript", "-e", window_tab_listing_script(window_index)],
@@ -89,6 +90,7 @@ def discover_window_tabs(
     payload = json.loads(result.stdout)
     discovered_at = datetime.now(UTC)
     counts = occurrence_counts if occurrence_counts is not None else {}
+    canonical_by_fingerprint = canonical_ids if canonical_ids is not None else {}
     tabs: list[ChromeTab] = []
     for item in payload:
         url = item.get("url", "").strip()
@@ -100,10 +102,14 @@ def discover_window_tabs(
         base_key = compute_stable_tab_base_key(url=url, title=title)
         counts[base_key] = counts.get(base_key, 0) + 1
         stable_key = f"{base_key}-{counts[base_key]}"
+        duplicate_of_tab_id = canonical_by_fingerprint.get(base_key)
+        if duplicate_of_tab_id is None:
+            canonical_by_fingerprint[base_key] = stable_key
         tabs.append(
             ChromeTab(
                 tab_id=stable_key,
                 stable_key=stable_key,
+                fingerprint_key=base_key,
                 window_index=item["window_index"],
                 tab_index=item["tab_index"],
                 title=title,
@@ -112,6 +118,7 @@ def discover_window_tabs(
                 discovered_at=discovered_at,
                 first_seen_at=discovered_at,
                 last_seen_at=discovered_at,
+                duplicate_of_tab_id=duplicate_of_tab_id,
             )
         )
     return tabs

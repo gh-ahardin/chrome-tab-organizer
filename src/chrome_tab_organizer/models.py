@@ -31,6 +31,7 @@ class PipelineStage(str, Enum):
 class ChromeTab(BaseModel):
     tab_id: str
     stable_key: str
+    fingerprint_key: str
     window_index: int
     tab_index: int
     title: str
@@ -39,6 +40,7 @@ class ChromeTab(BaseModel):
     discovered_at: datetime
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
+    duplicate_of_tab_id: str | None = None
 
 
 class ExtractedContent(BaseModel):
