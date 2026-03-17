@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chrome-tab-organizer"
+version = "0.1.0"
+description = "Local-first Chrome tab organizer for macOS with summarization, topic grouping, ranking, and export."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = [
+  "beautifulsoup4>=4.12.3",
+  "httpx>=0.28.1",
+  "pydantic>=2.11.1",
+  "tenacity>=9.0.0",
+  "trafilatura>=2.0.0",
+  "typer>=0.15.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+  "pytest-cov>=6.0.0",
+]
+
+[project.scripts]
+chrome-tab-organizer = "chrome_tab_organizer.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chrome_tab_organizer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "S", "C4"]
+ignore = ["S603"]
