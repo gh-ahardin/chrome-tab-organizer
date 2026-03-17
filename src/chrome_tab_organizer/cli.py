@@ -22,11 +22,18 @@ def run_pipeline(
         min=1,
         help="Process only a single Chrome window for safer crash-prone runs.",
     ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Discover only and skip extraction/summarization/export."),
+    sample_tabs: int | None = typer.Option(None, "--sample-tabs", min=1, help="Limit processing to the first N tabs."),
 ) -> None:
     """Run the full pipeline."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    outputs = pipeline.run(window_index=window_index)
+    outputs = pipeline.run(window_index=window_index, dry_run=dry_run, sample_tabs=sample_tabs)
+    summary = pipeline.build_run_summary()
+    typer.echo(
+        f"summary: total={summary.total_tabs} unique={summary.unique_tabs} duplicates={summary.duplicate_tabs} "
+        f"extracted={summary.extracted_tabs} summarized={summary.summarized_tabs} failed={summary.failed_tabs}"
+    )
     for name, path in outputs.items():
         typer.echo(f"{name}: {path}")
 
@@ -34,33 +41,37 @@ def run_pipeline(
 @app.command("discover-tabs")
 def discover_tabs(
     window_index: int | None = typer.Option(None, "--window-index", min=1),
+    sample_tabs: int | None = typer.Option(None, "--sample-tabs", min=1),
 ) -> None:
     """Discover tabs from Chrome."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    tabs = pipeline.discover(window_index=window_index)
-    typer.echo(f"Discovered {len(tabs)} tabs.")
+    tabs = pipeline.discover(window_index=window_index, sample_tabs=sample_tabs)
+    unique_count = len([tab for tab in tabs if tab.duplicate_of_tab_id is None])
+    typer.echo(f"Discovered {len(tabs)} tabs ({unique_count} unique).")
 
 
 @app.command("summarize")
 def summarize(
     window_index: int | None = typer.Option(None, "--window-index", min=1),
+    sample_tabs: int | None = typer.Option(None, "--sample-tabs", min=1),
 ) -> None:
     """Summarize extracted tabs."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    count = pipeline.summarize(window_index=window_index)
+    count = pipeline.summarize(window_index=window_index, sample_tabs=sample_tabs)
     typer.echo(f"Summarized {count} tabs.")
 
 
 @app.command("extract")
 def extract(
     window_index: int | None = typer.Option(None, "--window-index", min=1),
+    sample_tabs: int | None = typer.Option(None, "--sample-tabs", min=1),
 ) -> None:
     """Fetch and extract content for discovered tabs."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    count = pipeline.extract(window_index=window_index)
+    count = pipeline.extract(window_index=window_index, sample_tabs=sample_tabs)
     typer.echo(f"Extracted {count} tabs.")
 
 

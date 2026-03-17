@@ -382,6 +382,19 @@ class SQLiteCache:
             row = conn.execute("SELECT value FROM run_meta WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
 
+    def update_duplicate_links(self, duplicate_map: dict[str, str | None]) -> None:
+        if not duplicate_map:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                UPDATE tabs
+                SET duplicate_of_tab_id = ?, updated_at = ?
+                WHERE tab_id = ?
+                """,
+                [(duplicate_of, _utc_now(), tab_id) for tab_id, duplicate_of in duplicate_map.items()],
+            )
+
     def start_stage_run(
         self,
         stage: PipelineStage,

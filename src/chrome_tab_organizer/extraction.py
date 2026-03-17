@@ -3,10 +3,10 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 from datetime import UTC, datetime
+import time
 from urllib.parse import urlparse
 
 import httpx
-import trafilatura
 from bs4 import BeautifulSoup
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
@@ -15,6 +15,11 @@ from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.models import ChromeTab, ExtractedContent
 
 logger = logging.getLogger(__name__)
+
+try:
+    import trafilatura
+except ModuleNotFoundError:  # pragma: no cover - depends on environment
+    trafilatura = None
 
 
 def _domain_allowed(domain: str, settings: Settings) -> bool:
@@ -28,7 +33,12 @@ def _domain_allowed(domain: str, settings: Settings) -> bool:
 
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
     if settings.prefer_live_chrome_session:
-        return [extract_single_tab(tab, settings) for tab in tabs]
+        contents: list[ExtractedContent] = []
+        for index, tab in enumerate(tabs):
+            if index > 0 and settings.live_extract_tab_pause_seconds > 0:
+                time.sleep(settings.live_extract_tab_pause_seconds)
+            contents.append(extract_single_tab(tab, settings))
+        return contents
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_concurrency) as executor:
         futures = [executor.submit(extract_single_tab, tab, settings) for tab in tabs]
         return [future.result() for future in concurrent.futures.as_completed(futures)]
@@ -62,11 +72,15 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
         response.raise_for_status()
         html = response.text
 
-        extracted = trafilatura.extract(
-            html,
-            include_comments=False,
-            include_formatting=False,
-            favor_precision=True,
+        extracted = (
+            trafilatura.extract(
+                html,
+                include_comments=False,
+                include_formatting=False,
+                favor_precision=True,
+            )
+            if trafilatura is not None
+            else None
         )
         title = tab.title
         excerpt: str | None = None

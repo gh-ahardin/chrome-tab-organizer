@@ -1,13 +1,14 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from chrome_tab_organizer.exporters import export_bookmark_html, export_markdown_report
+from chrome_tab_organizer.exporters import export_bookmark_html, export_markdown_report, export_run_summary
 from chrome_tab_organizer.models import (
     ChromeTab,
     ExtractedContent,
     PageSummary,
     PipelineTabRecord,
     RankedPage,
+    RunSummary,
     TabEnrichment,
     TopicGroup,
     TabStatus,
@@ -80,9 +81,25 @@ def test_exporters_write_files(tmp_path: Path) -> None:
             why_read_now="Useful context.",
         )
     ]
-    report = export_markdown_report(tmp_path, [record], topics, top_pages)
+    run_summary = RunSummary(
+        generated_at=datetime.now(UTC),
+        total_tabs=1,
+        unique_tabs=1,
+        duplicate_tabs=0,
+        extracted_tabs=1,
+        summarized_tabs=1,
+        failed_tabs=0,
+        live_dom_extractions=1,
+        http_fallback_extractions=0,
+        medical_priority_tabs=0,
+        topic_count=1,
+    )
+    report = export_markdown_report(tmp_path, [record], topics, top_pages, run_summary)
     bookmarks = export_bookmark_html(tmp_path, [record])
+    summary = export_run_summary(tmp_path, run_summary)
     assert report.exists()
     assert bookmarks.exists()
+    assert summary.exists()
     assert "Top 10 Pages To Read Next" in report.read_text(encoding="utf-8")
+    assert "Medical Safety Note" in report.read_text(encoding="utf-8")
     assert "Bookmarks" in bookmarks.read_text(encoding="utf-8")

@@ -53,6 +53,7 @@ The MVP implemented here:
 - The tool does not move tabs permanently.
 - During live session extraction it briefly activates tabs and then restores the previously active tab in that window.
 - Duplicate tabs of the same page are kept in the raw cache snapshot but only processed once.
+- A second duplicate pass runs after extraction, so near-identical pages that resolve to the same final URL and content are merged before summarization.
 - If Chrome crashes mid-run, previously completed discovery, extraction, and summarization work remains in SQLite.
 - For unstable Chrome sessions, prefer running one window at a time with `--window-index`.
 
@@ -99,6 +100,7 @@ Environment variables are loaded from `.env`.
 | `CTO_PREFER_LIVE_CHROME_SESSION` | Read content from active Chrome session before HTTP fetch |
 | `CTO_SESSION_EXTRACT_TIMEOUT_SECONDS` | AppleScript timeout for live session extraction |
 | `CTO_SESSION_EXTRACT_ATTEMPTS` | Retry count for live DOM extraction |
+| `CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS` | Delay between live tab activations to reduce Chrome pressure |
 | `CTO_DISCOVERY_ATTEMPTS` | Retry count for per-window Chrome discovery |
 | `CTO_MIN_LIVE_EXTRACT_CHARS` | Minimum live DOM text length before skipping HTTP fallback |
 | `CTO_INCLUDE_DOMAINS` | Optional comma-separated allowlist |
@@ -108,6 +110,8 @@ Environment variables are loaded from `.env`.
 
 ```bash
 chrome-tab-organizer run
+chrome-tab-organizer run --dry-run
+chrome-tab-organizer run --sample-tabs 10
 chrome-tab-organizer run --window-index 1
 chrome-tab-organizer discover-tabs
 chrome-tab-organizer extract
@@ -162,6 +166,7 @@ After a successful run, the tool writes:
 
 - `output/report.md`
 - `output/bookmarks_by_topic.html`
+- `output/run_summary.json`
 - `output/tabs.json`
 - `.cache/chrome_tab_organizer.sqlite3`
 
@@ -183,6 +188,7 @@ Crash-hardening additions:
 2. Each stage records `running`, `completed`, `failed`, or `interrupted` state in SQLite.
 3. Live DOM extraction retries when Chrome is temporarily unstable.
 4. You can process a single window per run to reduce Chrome pressure.
+5. The CLI supports `--dry-run` and `--sample-tabs` so first contact with a real tab set can be incremental.
 
 ## Testing
 

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from chrome_tab_organizer.models import PipelineTabRecord, RankedPage, ReportBundle, TopicGroup
+from chrome_tab_organizer.models import PipelineTabRecord, RankedPage, ReportBundle, RunSummary, TopicGroup
 
 
 def export_markdown_report(
@@ -14,6 +14,7 @@ def export_markdown_report(
     records: list[PipelineTabRecord],
     topics: list[TopicGroup],
     top_pages: list[RankedPage],
+    run_summary: RunSummary,
 ) -> Path:
     report_path = output_dir / "report.md"
     generated_at = datetime.now(UTC).isoformat()
@@ -21,12 +22,33 @@ def export_markdown_report(
         "# Chrome Tab Organizer Report",
         "",
         f"Generated at: `{generated_at}`",
-        f"Total tabs: `{len(records)}`",
+        f"Total unique tabs in report: `{len(records)}`",
         f"Topics: `{len(topics)}`",
+        "",
+        "## Medical Safety Note",
+        "",
+        "This report is a reading and triage aid, not medical advice. Clinical-trial and oncology pages should be verified against the original source and discussed with a qualified clinician.",
+        "",
+        "## Operator Summary",
+        "",
+        f"- Total discovered tabs: {run_summary.total_tabs}",
+        f"- Unique tabs processed: {run_summary.unique_tabs}",
+        f"- Duplicate tabs ignored for processing: {run_summary.duplicate_tabs}",
+        f"- Extracted tabs: {run_summary.extracted_tabs}",
+        f"- Summarized tabs: {run_summary.summarized_tabs}",
+        f"- Failed tabs: {run_summary.failed_tabs}",
+        f"- Live DOM extractions: {run_summary.live_dom_extractions}",
+        f"- HTTP fallback extractions: {run_summary.http_fallback_extractions}",
+        f"- Medical-priority tabs: {run_summary.medical_priority_tabs}",
         "",
         "## Top 10 Pages To Read Next",
         "",
     ]
+    if run_summary.top_failure_domains:
+        lines.extend(["## Failure Hotspots", ""])
+        for item in run_summary.top_failure_domains:
+            lines.append(f"- {item.domain}: {item.count}")
+        lines.append("")
     for page in top_pages:
         lines.extend(
             [
@@ -84,6 +106,12 @@ def export_json_snapshot(output_dir: Path, records: list[PipelineTabRecord]) -> 
     payload = [record.model_dump(mode="json") for record in records]
     bundle_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return bundle_path
+
+
+def export_run_summary(output_dir: Path, run_summary: RunSummary) -> Path:
+    summary_path = output_dir / "run_summary.json"
+    summary_path.write_text(json.dumps(run_summary.model_dump(mode="json"), indent=2), encoding="utf-8")
+    return summary_path
 
 
 def build_report_bundle(

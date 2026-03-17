@@ -98,6 +98,26 @@ class RankedPage(BaseModel):
     why_read_now: str
 
 
+class FailureDomainStat(BaseModel):
+    domain: str
+    count: int
+
+
+class RunSummary(BaseModel):
+    generated_at: datetime
+    total_tabs: int
+    unique_tabs: int
+    duplicate_tabs: int
+    extracted_tabs: int
+    summarized_tabs: int
+    failed_tabs: int
+    live_dom_extractions: int
+    http_fallback_extractions: int
+    medical_priority_tabs: int
+    topic_count: int
+    top_failure_domains: list[FailureDomainStat] = Field(default_factory=list)
+
+
 class PipelineTabRecord(BaseModel):
     tab: ChromeTab
     content: ExtractedContent | None = None

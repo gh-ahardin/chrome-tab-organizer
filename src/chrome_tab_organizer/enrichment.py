@@ -14,6 +14,29 @@ from chrome_tab_organizer.models import (
     TopicGroup,
 )
 
+MEDICAL_KEYWORDS = {
+    "triple negative",
+    "breast cancer",
+    "tnbc",
+    "clinical trial",
+    "oncology",
+    "metastatic",
+    "histopathology",
+    "tumor",
+    "drug target",
+    "biomarker",
+}
+
+MEDICAL_DOMAINS = {
+    "clinicaltrials.gov",
+    "cancer.gov",
+    "pubmed.ncbi.nlm.nih.gov",
+    "asco.org",
+    "nature.com",
+    "nejm.org",
+    "thelancet.com",
+}
+
 
 def enrich_tabs(
     tab_content_pairs: list[tuple[ChromeTab, ExtractedContent]],
@@ -91,12 +114,7 @@ def rank_pages(
     tab_by_id = {tab.tab_id: tab for tab in tabs}
     ordered = sorted(
         enrichments,
-        key=lambda item: (
-            item.summary.importance_score,
-            item.summary.clinical_relevance,
-            item.summary.urgency,
-            item.summary.novelty,
-        ),
+        key=lambda item: page_priority_score(tab_by_id[item.tab_id], item),
         reverse=True,
     )[:limit]
     ranked: list[RankedPage] = []
@@ -114,3 +132,26 @@ def rank_pages(
             )
         )
     return ranked
+
+
+def page_priority_score(tab: ChromeTab, enrichment: TabEnrichment) -> tuple[int, int, int, int, int]:
+    medical_bonus = 0
+    lowered = f"{tab.title} {tab.url} {enrichment.summary.summary} {enrichment.summary.category}".lower()
+    if any(keyword in lowered for keyword in MEDICAL_KEYWORDS):
+        medical_bonus += 20
+    if tab.domain.lower() in MEDICAL_DOMAINS:
+        medical_bonus += 15
+    return (
+        enrichment.summary.importance_score + medical_bonus,
+        enrichment.summary.clinical_relevance,
+        enrichment.summary.urgency,
+        enrichment.summary.novelty,
+        enrichment.summary.personal_relevance,
+    )
+
+
+def is_medical_priority(tab: ChromeTab, enrichment: TabEnrichment | None) -> bool:
+    if enrichment is None:
+        return False
+    lowered = f"{tab.title} {tab.url} {enrichment.summary.summary} {enrichment.topic}".lower()
+    return any(keyword in lowered for keyword in MEDICAL_KEYWORDS) or tab.domain.lower() in MEDICAL_DOMAINS
