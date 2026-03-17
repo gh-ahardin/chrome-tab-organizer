@@ -14,12 +14,12 @@ class Settings(BaseModel):
     api_key: str = ""
     base_url: str | None = None
     anthropic_version: str = "2023-06-01"
-    aws_region: str | None = None
+    aws_region: str | None = "us-west-2"
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     aws_bearer_token_bedrock: str | None = None
-    bedrock_model_id: str | None = None
+    bedrock_model_id: str | None = "anthropic.claude-sonnet-4-6"
     max_tabs: int | None = None
     fetch_timeout_seconds: float = 20.0
     max_concurrency: int = 8
@@ -68,6 +68,8 @@ class Settings(BaseModel):
             if raw in (None, ""):
                 continue
             values[field_name] = raw
+        if "provider" not in values and merged.get("AWS_BEARER_TOKEN_BEDROCK"):
+            values["provider"] = "bedrock"
         return cls.model_validate(values)
 
     @field_validator("provider")

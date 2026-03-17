@@ -70,7 +70,7 @@ pip install -e ".[dev]"
 4. Run:
 
 ```bash
-chrome-tab-organizer run --output-dir output
+chrome-tab-organizer run
 ```
 
 ## Configuration
@@ -81,7 +81,7 @@ Environment variables are loaded from `.env`.
 | --- | --- |
 | `CTO_DB_PATH` | SQLite database path |
 | `CTO_OUTPUT_DIR` | Output directory |
-| `CTO_PROVIDER` | `openai_compatible`, `anthropic`, `bedrock`, or `none` |
+| `CTO_PROVIDER` | `openai_compatible`, `anthropic`, `bedrock`, or `none`; auto-detects `bedrock` when `AWS_BEARER_TOKEN_BEDROCK` is set |
 | `CTO_MODEL` | Model name |
 | `CTO_API_KEY` | API key |
 | `CTO_BASE_URL` | Base URL for OpenAI-compatible providers |
@@ -120,13 +120,19 @@ chrome-tab-organizer export
 To use Claude through AWS Bedrock, set:
 
 ```bash
-CTO_PROVIDER=bedrock
 CTO_AWS_REGION=us-west-2
 AWS_BEARER_TOKEN_BEDROCK=...
-CTO_BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+CTO_BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-6
 ```
 
 You can use either standard AWS credentials or `AWS_BEARER_TOKEN_BEDROCK`. Amazon’s current Bedrock docs explicitly recognize `AWS_BEARER_TOKEN_BEDROCK` as the environment variable for Bedrock API-key auth.
+
+As of March 17, 2026, this project defaults Bedrock to:
+
+- Region: `us-west-2`
+- Model: `anthropic.claude-sonnet-4-6`
+
+That default is an engineering choice based on current AWS Bedrock support documentation showing Claude Sonnet 4.6 as a supported Anthropic model in Bedrock. If you want a cheaper or faster default, override `CTO_BEDROCK_MODEL_ID`.
 
 ## Project structure
 
