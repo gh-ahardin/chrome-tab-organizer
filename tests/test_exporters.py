@@ -16,7 +16,8 @@ from chrome_tab_organizer.models import (
 
 def sample_record() -> PipelineTabRecord:
     tab = ChromeTab(
-        tab_id="w1-t1",
+        tab_id="stable-1",
+        stable_key="stable-1",
         window_index=1,
         tab_index=1,
         title="Example title",

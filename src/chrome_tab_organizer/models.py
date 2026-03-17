@@ -14,14 +14,31 @@ class TabStatus(str, Enum):
     failed = "failed"
 
 
+class StageStatus(str, Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    interrupted = "interrupted"
+
+
+class PipelineStage(str, Enum):
+    discover = "discover"
+    extract = "extract"
+    summarize = "summarize"
+    export = "export"
+
+
 class ChromeTab(BaseModel):
     tab_id: str
+    stable_key: str
     window_index: int
     tab_index: int
     title: str
     url: HttpUrl
     domain: str
     discovered_at: datetime
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
 
 
 class ExtractedContent(BaseModel):
@@ -91,3 +108,13 @@ class ReportBundle(BaseModel):
     total_tabs: int
     topics: list[TopicGroup]
     top_pages: list[RankedPage]
+
+
+class StageRun(BaseModel):
+    run_id: str
+    stage: PipelineStage
+    status: StageStatus
+    started_at: datetime
+    completed_at: datetime | None = None
+    details: dict[str, str | int | float | None] = Field(default_factory=dict)
+    error: str | None = None

@@ -2,12 +2,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from chrome_tab_organizer.cache import SQLiteCache
-from chrome_tab_organizer.models import ChromeTab, ExtractedContent, PageSummary, TabEnrichment
+from chrome_tab_organizer.models import (
+    ChromeTab,
+    ExtractedContent,
+    PageSummary,
+    PipelineStage,
+    StageStatus,
+    TabEnrichment,
+)
 
 
 def build_tab() -> ChromeTab:
     return ChromeTab(
-        tab_id="w1-t1",
+        tab_id="stable-1",
+        stable_key="stable-1",
         window_index=1,
         tab_index=1,
         title="Clinical trial result",
@@ -60,3 +68,13 @@ def test_sqlite_cache_round_trip(tmp_path: Path) -> None:
     assert len(records) == 1
     assert records[0].enrichment is not None
     assert records[0].enrichment.topic == "Oncology Research"
+
+
+def test_pipeline_run_journaling_marks_interrupted(tmp_path: Path) -> None:
+    cache = SQLiteCache(tmp_path / "cache.sqlite3")
+    run_id = cache.start_stage_run(PipelineStage.discover, details={"window_index": 1})
+    cache.interrupt_running_runs()
+    runs = cache.get_stage_runs()
+    assert len(runs) == 1
+    assert runs[0].run_id == run_id
+    assert runs[0].status == StageStatus.interrupted

@@ -22,6 +22,8 @@ The MVP implemented here:
 - Extracts content from the active logged-in Chrome session before any network refetch
 - Downloads and extracts article-like text from page URLs
 - Caches tabs, extracted content, summaries, and topics in SQLite
+- Journals pipeline stages so interrupted runs are visible and recoverable
+- Uses stable tab keys so cache entries survive Chrome restarts better than raw window/tab positions
 - Summarizes each page into structured records
 - Assigns tabs into topics and scores importance
 - Exports:
@@ -42,6 +44,15 @@ The MVP implemented here:
 - Chrome tab discovery requires macOS with Google Chrome installed and script access permitted.
 - Live session extraction depends on Chrome allowing AppleScript-driven JavaScript execution in the page.
 - Some pages may mutate when activated because Chrome brings each tab to the foreground briefly during session capture.
+- Duplicated tabs with identical title and URL are disambiguated by occurrence order, which is robust but not perfect if Chrome reorders identical duplicates after a crash.
+
+## Runtime behavior
+
+- The tool does not close tabs.
+- The tool does not move tabs permanently.
+- During live session extraction it briefly activates tabs and then restores the previously active tab in that window.
+- If Chrome crashes mid-run, previously completed discovery, extraction, and summarization work remains in SQLite.
+- For unstable Chrome sessions, prefer running one window at a time with `--window-index`.
 
 ## Quick start
 
@@ -79,6 +90,8 @@ Environment variables are loaded from `.env`.
 | `CTO_LLM_MAX_INPUT_CHARS` | Max extracted text characters sent to LLM |
 | `CTO_PREFER_LIVE_CHROME_SESSION` | Read content from active Chrome session before HTTP fetch |
 | `CTO_SESSION_EXTRACT_TIMEOUT_SECONDS` | AppleScript timeout for live session extraction |
+| `CTO_SESSION_EXTRACT_ATTEMPTS` | Retry count for live DOM extraction |
+| `CTO_DISCOVERY_ATTEMPTS` | Retry count for per-window Chrome discovery |
 | `CTO_MIN_LIVE_EXTRACT_CHARS` | Minimum live DOM text length before skipping HTTP fallback |
 | `CTO_INCLUDE_DOMAINS` | Optional comma-separated allowlist |
 | `CTO_EXCLUDE_DOMAINS` | Optional comma-separated blocklist |
@@ -87,6 +100,7 @@ Environment variables are loaded from `.env`.
 
 ```bash
 chrome-tab-organizer run
+chrome-tab-organizer run --window-index 1
 chrome-tab-organizer discover-tabs
 chrome-tab-organizer extract
 chrome-tab-organizer summarize
@@ -135,6 +149,13 @@ The pipeline is intentionally staged:
 5. Export bookmarks and a Markdown report
 
 Each stage persists state into SQLite so reruns skip finished work where possible.
+
+Crash-hardening additions:
+
+1. Discovery is persisted incrementally window by window.
+2. Each stage records `running`, `completed`, `failed`, or `interrupted` state in SQLite.
+3. Live DOM extraction retries when Chrome is temporarily unstable.
+4. You can process a single window per run to reduce Chrome pressure.
 
 ## Testing
 

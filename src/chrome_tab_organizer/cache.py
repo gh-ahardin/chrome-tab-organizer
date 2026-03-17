@@ -6,11 +6,15 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Iterator
+import uuid
 
 from chrome_tab_organizer.models import (
     ChromeTab,
     ExtractedContent,
     PipelineTabRecord,
+    PipelineStage,
+    StageRun,
+    StageStatus,
     TabEnrichment,
     TabStatus,
 )
@@ -44,12 +48,15 @@ class SQLiteCache:
 
                 CREATE TABLE IF NOT EXISTS tabs (
                     tab_id TEXT PRIMARY KEY,
+                    stable_key TEXT NOT NULL,
                     window_index INTEGER NOT NULL,
                     tab_index INTEGER NOT NULL,
                     title TEXT NOT NULL,
                     url TEXT NOT NULL,
                     domain TEXT NOT NULL,
                     discovered_at TEXT NOT NULL,
+                    first_seen_at TEXT,
+                    last_seen_at TEXT,
                     status TEXT NOT NULL DEFAULT 'discovered',
                     last_error TEXT,
                     updated_at TEXT NOT NULL
@@ -74,8 +81,32 @@ class SQLiteCache:
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS pipeline_runs (
+                    run_id TEXT PRIMARY KEY,
+                    stage TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    details_json TEXT NOT NULL,
+                    error TEXT
+                );
                 """
             )
+            self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(tabs)").fetchall()
+        }
+        expected = {
+            "stable_key": "TEXT NOT NULL DEFAULT ''",
+            "first_seen_at": "TEXT",
+            "last_seen_at": "TEXT",
+        }
+        for name, column_type in expected.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE tabs ADD COLUMN {name} {column_type}")
 
     def upsert_tabs(self, tabs: list[ChromeTab]) -> None:
         if not tabs:
@@ -84,25 +115,37 @@ class SQLiteCache:
             conn.executemany(
                 """
                 INSERT INTO tabs (
-                    tab_id, window_index, tab_index, title, url, domain, discovered_at, status, updated_at
+                    tab_id, stable_key, window_index, tab_index, title, url, domain, discovered_at,
+                    first_seen_at, last_seen_at, status, updated_at
                 )
-                VALUES (:tab_id, :window_index, :tab_index, :title, :url, :domain, :discovered_at, :status, :updated_at)
+                VALUES (
+                    :tab_id, :stable_key, :window_index, :tab_index, :title, :url, :domain, :discovered_at,
+                    :first_seen_at, :last_seen_at, :status, :updated_at
+                )
                 ON CONFLICT(tab_id) DO UPDATE SET
+                    stable_key=excluded.stable_key,
                     title=excluded.title,
                     url=excluded.url,
                     domain=excluded.domain,
                     discovered_at=excluded.discovered_at,
+                    window_index=excluded.window_index,
+                    tab_index=excluded.tab_index,
+                    last_seen_at=excluded.last_seen_at,
+                    first_seen_at=COALESCE(tabs.first_seen_at, excluded.first_seen_at),
                     updated_at=excluded.updated_at
                 """,
                 [
                     {
                         "tab_id": tab.tab_id,
+                        "stable_key": tab.stable_key,
                         "window_index": tab.window_index,
                         "tab_index": tab.tab_index,
                         "title": tab.title,
                         "url": str(tab.url),
                         "domain": tab.domain,
                         "discovered_at": tab.discovered_at.isoformat(),
+                        "first_seen_at": (tab.first_seen_at or tab.discovered_at).isoformat(),
+                        "last_seen_at": (tab.last_seen_at or tab.discovered_at).isoformat(),
                         "status": TabStatus.discovered.value,
                         "updated_at": _utc_now(),
                     }
@@ -157,12 +200,15 @@ class SQLiteCache:
                 """
                 SELECT
                     t.tab_id,
+                    t.stable_key,
                     t.window_index,
                     t.tab_index,
                     t.title,
                     t.url,
                     t.domain,
                     t.discovered_at,
+                    t.first_seen_at,
+                    t.last_seen_at,
                     t.status,
                     ec.payload_json AS content_json,
                     e.payload_json AS enrichment_json
@@ -177,12 +223,19 @@ class SQLiteCache:
         for row in rows:
             tab = ChromeTab(
                 tab_id=row["tab_id"],
+                stable_key=row["stable_key"],
                 window_index=row["window_index"],
                 tab_index=row["tab_index"],
                 title=row["title"],
                 url=row["url"],
                 domain=row["domain"],
                 discovered_at=datetime.fromisoformat(row["discovered_at"]),
+                first_seen_at=(
+                    datetime.fromisoformat(row["first_seen_at"]) if row["first_seen_at"] else None
+                ),
+                last_seen_at=(
+                    datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
+                ),
             )
             content = (
                 ExtractedContent.model_validate(json.loads(row["content_json"]))
@@ -204,59 +257,86 @@ class SQLiteCache:
             )
         return records
 
-    def get_tabs_missing_content(self) -> list[ChromeTab]:
+    def get_tabs_missing_content(self, window_index: int | None = None) -> list[ChromeTab]:
         with self.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT tab_id, window_index, tab_index, title, url, domain, discovered_at
+            query = """
+                SELECT tab_id, stable_key, window_index, tab_index, title, url, domain, discovered_at,
+                       first_seen_at, last_seen_at
                 FROM tabs
                 WHERE tab_id NOT IN (SELECT tab_id FROM extracted_content)
-                ORDER BY window_index, tab_index
-                """
-            ).fetchall()
+            """
+            params: tuple[object, ...] = ()
+            if window_index is not None:
+                query += " AND window_index = ?"
+                params = (window_index,)
+            query += " ORDER BY window_index, tab_index"
+            rows = conn.execute(query, params).fetchall()
         return [
             ChromeTab(
                 tab_id=row["tab_id"],
+                stable_key=row["stable_key"],
                 window_index=row["window_index"],
                 tab_index=row["tab_index"],
                 title=row["title"],
                 url=row["url"],
                 domain=row["domain"],
                 discovered_at=datetime.fromisoformat(row["discovered_at"]),
+                first_seen_at=(
+                    datetime.fromisoformat(row["first_seen_at"]) if row["first_seen_at"] else None
+                ),
+                last_seen_at=(
+                    datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
+                ),
             )
             for row in rows
         ]
 
-    def get_tabs_missing_enrichment(self) -> list[tuple[ChromeTab, ExtractedContent]]:
+    def get_tabs_missing_enrichment(
+        self,
+        window_index: int | None = None,
+    ) -> list[tuple[ChromeTab, ExtractedContent]]:
         with self.connect() as conn:
-            rows = conn.execute(
-                """
+            query = """
                 SELECT
                     t.tab_id,
+                    t.stable_key,
                     t.window_index,
                     t.tab_index,
                     t.title,
                     t.url,
                     t.domain,
                     t.discovered_at,
+                    t.first_seen_at,
+                    t.last_seen_at,
                     ec.payload_json
                 FROM tabs t
                 JOIN extracted_content ec ON ec.tab_id = t.tab_id
                 LEFT JOIN enrichments e ON e.tab_id = t.tab_id
                 WHERE e.tab_id IS NULL
-                ORDER BY t.window_index, t.tab_index
-                """
-            ).fetchall()
+            """
+            params: tuple[object, ...] = ()
+            if window_index is not None:
+                query += " AND t.window_index = ?"
+                params = (window_index,)
+            query += " ORDER BY t.window_index, t.tab_index"
+            rows = conn.execute(query, params).fetchall()
         return [
             (
                 ChromeTab(
                     tab_id=row["tab_id"],
+                    stable_key=row["stable_key"],
                     window_index=row["window_index"],
                     tab_index=row["tab_index"],
                     title=row["title"],
                     url=row["url"],
                     domain=row["domain"],
                     discovered_at=datetime.fromisoformat(row["discovered_at"]),
+                    first_seen_at=(
+                        datetime.fromisoformat(row["first_seen_at"]) if row["first_seen_at"] else None
+                    ),
+                    last_seen_at=(
+                        datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
+                    ),
                 ),
                 ExtractedContent.model_validate(json.loads(row["payload_json"])),
             )
@@ -280,3 +360,108 @@ class SQLiteCache:
         with self.connect() as conn:
             row = conn.execute("SELECT value FROM run_meta WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
+
+    def start_stage_run(
+        self,
+        stage: PipelineStage,
+        details: dict[str, str | int | float | None] | None = None,
+    ) -> str:
+        run_id = str(uuid.uuid4())
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pipeline_runs (run_id, stage, status, started_at, details_json, error)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    stage.value,
+                    StageStatus.running.value,
+                    _utc_now(),
+                    json.dumps(details or {}),
+                    None,
+                ),
+            )
+        return run_id
+
+    def finish_stage_run(
+        self,
+        run_id: str,
+        details: dict[str, str | int | float | None] | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pipeline_runs
+                SET status = ?, completed_at = ?, details_json = ?
+                WHERE run_id = ?
+                """,
+                (
+                    StageStatus.completed.value,
+                    _utc_now(),
+                    json.dumps(details or {}),
+                    run_id,
+                ),
+            )
+
+    def fail_stage_run(
+        self,
+        run_id: str,
+        error: str,
+        details: dict[str, str | int | float | None] | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pipeline_runs
+                SET status = ?, completed_at = ?, details_json = ?, error = ?
+                WHERE run_id = ?
+                """,
+                (
+                    StageStatus.failed.value,
+                    _utc_now(),
+                    json.dumps(details or {}),
+                    error,
+                    run_id,
+                ),
+            )
+
+    def interrupt_running_runs(self) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pipeline_runs
+                SET status = ?, completed_at = ?, error = COALESCE(error, ?)
+                WHERE status = ?
+                """,
+                (
+                    StageStatus.interrupted.value,
+                    _utc_now(),
+                    "Previous process stopped before stage completion.",
+                    StageStatus.running.value,
+                ),
+            )
+
+    def get_stage_runs(self) -> list[StageRun]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, stage, status, started_at, completed_at, details_json, error
+                FROM pipeline_runs
+                ORDER BY started_at
+                """
+            ).fetchall()
+        return [
+            StageRun(
+                run_id=row["run_id"],
+                stage=PipelineStage(row["stage"]),
+                status=StageStatus(row["status"]),
+                started_at=datetime.fromisoformat(row["started_at"]),
+                completed_at=(
+                    datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+                ),
+                details=json.loads(row["details_json"]),
+                error=row["error"],
+            )
+            for row in rows
+        ]

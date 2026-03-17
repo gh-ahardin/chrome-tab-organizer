@@ -6,6 +6,7 @@ from chrome_tab_organizer.models import ChromeTab, PageSummary
 def test_chrome_tab_model() -> None:
     tab = ChromeTab(
         tab_id="w1-t1",
+        stable_key="stable-1",
         window_index=1,
         tab_index=1,
         title="Example",
@@ -14,6 +15,7 @@ def test_chrome_tab_model() -> None:
         discovered_at=datetime.now(UTC),
     )
     assert tab.domain == "example.com"
+    assert tab.stable_key == "stable-1"
 
 
 def test_page_summary_bounds() -> None:

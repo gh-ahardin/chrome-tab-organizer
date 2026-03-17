@@ -15,47 +15,62 @@ def main(verbose: bool = typer.Option(False, "--verbose", help="Enable debug log
 
 
 @app.command("run")
-def run_pipeline() -> None:
+def run_pipeline(
+    window_index: int | None = typer.Option(
+        None,
+        "--window-index",
+        min=1,
+        help="Process only a single Chrome window for safer crash-prone runs.",
+    ),
+) -> None:
     """Run the full pipeline."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    outputs = pipeline.run()
+    outputs = pipeline.run(window_index=window_index)
     for name, path in outputs.items():
         typer.echo(f"{name}: {path}")
 
 
 @app.command("discover-tabs")
-def discover_tabs() -> None:
+def discover_tabs(
+    window_index: int | None = typer.Option(None, "--window-index", min=1),
+) -> None:
     """Discover tabs from Chrome."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    tabs = pipeline.discover()
+    tabs = pipeline.discover(window_index=window_index)
     typer.echo(f"Discovered {len(tabs)} tabs.")
 
 
 @app.command("summarize")
-def summarize() -> None:
+def summarize(
+    window_index: int | None = typer.Option(None, "--window-index", min=1),
+) -> None:
     """Summarize extracted tabs."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    count = pipeline.summarize()
+    count = pipeline.summarize(window_index=window_index)
     typer.echo(f"Summarized {count} tabs.")
 
 
 @app.command("extract")
-def extract() -> None:
+def extract(
+    window_index: int | None = typer.Option(None, "--window-index", min=1),
+) -> None:
     """Fetch and extract content for discovered tabs."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    count = pipeline.extract()
+    count = pipeline.extract(window_index=window_index)
     typer.echo(f"Extracted {count} tabs.")
 
 
 @app.command("export")
-def export() -> None:
+def export(
+    window_index: int | None = typer.Option(None, "--window-index", min=1),
+) -> None:
     """Export bookmarks and reports."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    outputs = pipeline.export()
+    outputs = pipeline.export(window_index=window_index)
     for name, path in outputs.items():
         typer.echo(f"{name}: {path}")

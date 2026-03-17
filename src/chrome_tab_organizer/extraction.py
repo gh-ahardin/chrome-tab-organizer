@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 import trafilatura
 from bs4 import BeautifulSoup
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from chrome_tab_organizer.chrome import capture_live_tab_snapshot
 from chrome_tab_organizer.config import Settings
@@ -122,11 +123,7 @@ def extract_from_live_session(
     fetched_at: datetime,
 ) -> ExtractedContent | None:
     try:
-        snapshot = capture_live_tab_snapshot(
-            window_index=tab.window_index,
-            tab_index=tab.tab_index,
-            timeout_seconds=settings.session_extract_timeout_seconds,
-        )
+        snapshot = _capture_live_tab_snapshot_with_retry(tab, settings)
     except Exception as exc:  # noqa: BLE001
         logger.info("Live session extraction unavailable for %s: %s", tab.tab_id, exc)
         return None
@@ -147,4 +144,22 @@ def extract_from_live_session(
         text_char_count=int(snapshot.get("text_char_count") or len(raw_text)),
         extraction_method="chrome_live_dom",
         fetched_at=fetched_at,
+    )
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_fixed(1),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
+def _capture_live_tab_snapshot_with_retry(
+    tab: ChromeTab,
+    settings: Settings,
+) -> dict[str, str | int | None]:
+    return capture_live_tab_snapshot(
+        window_index=tab.window_index,
+        tab_index=tab.tab_index,
+        timeout_seconds=settings.session_extract_timeout_seconds,
+        attempts=settings.session_extract_attempts,
     )

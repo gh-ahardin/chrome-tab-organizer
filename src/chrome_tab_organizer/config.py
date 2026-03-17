@@ -20,6 +20,8 @@ class Settings(BaseModel):
     llm_max_input_chars: int = 12000
     prefer_live_chrome_session: bool = True
     session_extract_timeout_seconds: float = 8.0
+    session_extract_attempts: int = 3
+    discovery_attempts: int = 3
     min_live_extract_chars: int = 200
     include_domains: list[str] = Field(default_factory=list)
     exclude_domains: list[str] = Field(default_factory=list)
@@ -43,6 +45,8 @@ class Settings(BaseModel):
             "llm_max_input_chars": "CTO_LLM_MAX_INPUT_CHARS",
             "prefer_live_chrome_session": "CTO_PREFER_LIVE_CHROME_SESSION",
             "session_extract_timeout_seconds": "CTO_SESSION_EXTRACT_TIMEOUT_SECONDS",
+            "session_extract_attempts": "CTO_SESSION_EXTRACT_ATTEMPTS",
+            "discovery_attempts": "CTO_DISCOVERY_ATTEMPTS",
             "min_live_extract_chars": "CTO_MIN_LIVE_EXTRACT_CHARS",
             "include_domains": "CTO_INCLUDE_DOMAINS",
             "exclude_domains": "CTO_EXCLUDE_DOMAINS",
