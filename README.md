@@ -92,7 +92,7 @@ Environment variables are loaded from `.env`.
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key for Bedrock |
 | `AWS_SESSION_TOKEN` | Optional AWS session token for Bedrock |
 | `AWS_BEARER_TOKEN_BEDROCK` | Bedrock API key / bearer token for Bedrock API-key auth |
-| `CTO_BEDROCK_MODEL_ID` | Bedrock model ID, for example a Claude model ARN or model name |
+| `CTO_BEDROCK_MODEL_ID` | Bedrock model ID or inference profile ID |
 | `CTO_MAX_TABS` | Optional cap for tabs processed |
 | `CTO_FETCH_TIMEOUT_SECONDS` | HTTP fetch timeout |
 | `CTO_MAX_CONCURRENCY` | Concurrent extraction workers |
@@ -103,6 +103,7 @@ Environment variables are loaded from `.env`.
 | `CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS` | Delay between live tab activations to reduce Chrome pressure |
 | `CTO_DISCOVERY_ATTEMPTS` | Retry count for per-window Chrome discovery |
 | `CTO_MIN_LIVE_EXTRACT_CHARS` | Minimum live DOM text length before skipping HTTP fallback |
+| `CTO_LIVE_SESSION_SKIP_DOMAINS` | Comma-separated domains to avoid activating in live Chrome session, such as YouTube |
 | `CTO_INCLUDE_DOMAINS` | Optional comma-separated allowlist |
 | `CTO_EXCLUDE_DOMAINS` | Optional comma-separated blocklist |
 
@@ -126,7 +127,7 @@ To use Claude through AWS Bedrock, set:
 ```bash
 CTO_AWS_REGION=us-west-2
 AWS_BEARER_TOKEN_BEDROCK=...
-CTO_BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-6
+CTO_BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6
 ```
 
 You can use either standard AWS credentials or `AWS_BEARER_TOKEN_BEDROCK`. Amazon’s current Bedrock docs explicitly recognize `AWS_BEARER_TOKEN_BEDROCK` as the environment variable for Bedrock API-key auth.
@@ -134,9 +135,9 @@ You can use either standard AWS credentials or `AWS_BEARER_TOKEN_BEDROCK`. Amazo
 As of March 17, 2026, this project defaults Bedrock to:
 
 - Region: `us-west-2`
-- Model: `anthropic.claude-sonnet-4-6`
+- Model: `us.anthropic.claude-sonnet-4-6`
 
-That default is an engineering choice based on current AWS Bedrock support documentation showing Claude Sonnet 4.6 as a supported Anthropic model in Bedrock. If you want a cheaper or faster default, override `CTO_BEDROCK_MODEL_ID`.
+That default is an engineering choice based on current AWS Bedrock support documentation showing the US Claude Sonnet 4.6 inference profile ID as `us.anthropic.claude-sonnet-4-6`. If you want a cheaper or faster default, override `CTO_BEDROCK_MODEL_ID`.
 
 ## Project structure
 

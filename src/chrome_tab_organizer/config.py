@@ -19,7 +19,7 @@ class Settings(BaseModel):
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     aws_bearer_token_bedrock: str | None = None
-    bedrock_model_id: str | None = "anthropic.claude-sonnet-4-6"
+    bedrock_model_id: str | None = "us.anthropic.claude-sonnet-4-6"
     max_tabs: int | None = None
     fetch_timeout_seconds: float = 20.0
     max_concurrency: int = 8
@@ -30,6 +30,15 @@ class Settings(BaseModel):
     live_extract_tab_pause_seconds: float = 0.35
     discovery_attempts: int = 3
     min_live_extract_chars: int = 200
+    live_session_skip_domains: list[str] = Field(
+        default_factory=lambda: [
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "music.youtube.com",
+            "youtu.be",
+        ]
+    )
     include_domains: list[str] = Field(default_factory=list)
     exclude_domains: list[str] = Field(default_factory=list)
 
@@ -62,6 +71,7 @@ class Settings(BaseModel):
             "live_extract_tab_pause_seconds": "CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS",
             "discovery_attempts": "CTO_DISCOVERY_ATTEMPTS",
             "min_live_extract_chars": "CTO_MIN_LIVE_EXTRACT_CHARS",
+            "live_session_skip_domains": "CTO_LIVE_SESSION_SKIP_DOMAINS",
             "include_domains": "CTO_INCLUDE_DOMAINS",
             "exclude_domains": "CTO_EXCLUDE_DOMAINS",
         }
@@ -83,7 +93,7 @@ class Settings(BaseModel):
             raise ValueError(f"provider must be one of {sorted(allowed)}")
         return normalized
 
-    @field_validator("include_domains", "exclude_domains", mode="before")
+    @field_validator("include_domains", "exclude_domains", "live_session_skip_domains", mode="before")
     @classmethod
     def split_csv(cls, value: str | list[str] | None) -> list[str]:
         if value is None:

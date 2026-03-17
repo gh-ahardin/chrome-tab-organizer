@@ -31,6 +31,10 @@ def _domain_allowed(domain: str, settings: Settings) -> bool:
     return True
 
 
+def _skip_live_session_for_domain(domain: str, settings: Settings) -> bool:
+    return domain.lower() in settings.live_session_skip_domains
+
+
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
     if settings.prefer_live_chrome_session:
         contents: list[ExtractedContent] = []
@@ -58,7 +62,7 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
         )
 
     try:
-        if settings.prefer_live_chrome_session:
+        if settings.prefer_live_chrome_session and not _skip_live_session_for_domain(tab.domain, settings):
             live_content = extract_from_live_session(tab, settings, fetched_at)
             if live_content and live_content.text_char_count >= settings.min_live_extract_chars:
                 return live_content
@@ -69,7 +73,6 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
             headers={"User-Agent": "chrome-tab-organizer/0.1"},
         ) as client:
             response = client.get(str(tab.url))
-        response.raise_for_status()
         html = response.text
 
         extracted = (
@@ -113,6 +116,11 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
             text_char_count=len(raw_text),
             extraction_method=method,
             fetched_at=fetched_at,
+            error=(
+                f"Non-200 status during HTTP fallback: {response.status_code}"
+                if response.status_code >= 400
+                else None
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Extraction failed for %s (%s): %s", tab.tab_id, tab.domain, exc)
