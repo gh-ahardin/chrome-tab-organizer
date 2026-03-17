@@ -9,6 +9,19 @@ from chrome_tab_organizer.pipeline import OrganizerPipeline
 app = typer.Typer(help="Organize Chrome tabs into summaries, topics, bookmarks, and reports.")
 
 
+def _echo_discovered_tabs(tabs) -> None:
+    if not tabs:
+        return
+    typer.echo("discovered_tabs:")
+    for tab in tabs:
+        duplicate_suffix = f" duplicate_of={tab.duplicate_of_tab_id}" if tab.duplicate_of_tab_id else ""
+        typer.echo(
+            f"- window={tab.window_index} tab={tab.tab_index}{duplicate_suffix}\n"
+            f"  title: {tab.title}\n"
+            f"  url: {tab.url}"
+        )
+
+
 @app.callback()
 def main(verbose: bool = typer.Option(False, "--verbose", help="Enable debug logging.")) -> None:
     configure_logging(verbose=verbose)
@@ -28,8 +41,23 @@ def run_pipeline(
     """Run the full pipeline."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
+    if dry_run:
+        try:
+            tabs = pipeline.discover(window_index=window_index, sample_tabs=sample_tabs)
+        except RuntimeError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1)
+        _echo_discovered_tabs(tabs)
+        typer.echo("dry_run: extraction, summarization, and export were skipped.")
+        summary = pipeline.build_run_summary()
+        typer.echo(
+            f"summary: total={summary.total_tabs} unique={summary.unique_tabs} duplicates={summary.duplicate_tabs} "
+            f"extracted={summary.extracted_tabs} summarized={summary.summarized_tabs} failed={summary.failed_tabs}"
+        )
+        return
+
     try:
-        outputs = pipeline.run(window_index=window_index, dry_run=dry_run, sample_tabs=sample_tabs)
+        outputs = pipeline.run(window_index=window_index, dry_run=False, sample_tabs=sample_tabs)
     except RuntimeError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -57,6 +85,7 @@ def discover_tabs(
         raise typer.Exit(code=1)
     unique_count = len([tab for tab in tabs if tab.duplicate_of_tab_id is None])
     typer.echo(f"Discovered {len(tabs)} tabs ({unique_count} unique).")
+    _echo_discovered_tabs(tabs)
 
 
 @app.command("summarize")
