@@ -10,7 +10,7 @@ import httpx
 from bs4 import BeautifulSoup
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from chrome_tab_organizer.chrome import capture_live_tab_snapshot
+from chrome_tab_organizer.chrome import capture_live_tab_snapshot, probe_live_javascript_support
 from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.models import ChromeTab, ExtractedContent
 
@@ -36,19 +36,54 @@ def _skip_live_session_for_domain(domain: str, settings: Settings) -> bool:
 
 
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
+    live_session_available = settings.prefer_live_chrome_session
+    live_session_unavailable_reason: str | None = None
+    live_session_unavailable_message: str | None = None
+
+    if settings.prefer_live_chrome_session:
+        (
+            live_session_available,
+            live_session_unavailable_reason,
+            live_session_unavailable_message,
+        ) = probe_live_javascript_support()
+        if not live_session_available:
+            if settings.require_live_chrome_session:
+                raise RuntimeError(
+                    live_session_unavailable_message or "Live Chrome session extraction is unavailable."
+                )
+            logger.warning(
+                "Live Chrome session extraction unavailable for this run: %s",
+                live_session_unavailable_message or live_session_unavailable_reason,
+            )
+
     if settings.prefer_live_chrome_session:
         contents: list[ExtractedContent] = []
         for index, tab in enumerate(tabs):
             if index > 0 and settings.live_extract_tab_pause_seconds > 0:
                 time.sleep(settings.live_extract_tab_pause_seconds)
-            contents.append(extract_single_tab(tab, settings))
+            contents.append(
+                extract_single_tab(
+                    tab,
+                    settings,
+                    live_session_available=live_session_available,
+                    live_session_unavailable_reason=live_session_unavailable_reason,
+                    live_session_unavailable_message=live_session_unavailable_message,
+                )
+            )
         return contents
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_concurrency) as executor:
         futures = [executor.submit(extract_single_tab, tab, settings) for tab in tabs]
         return [future.result() for future in concurrent.futures.as_completed(futures)]
 
 
-def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
+def extract_single_tab(
+    tab: ChromeTab,
+    settings: Settings,
+    *,
+    live_session_available: bool = True,
+    live_session_unavailable_reason: str | None = None,
+    live_session_unavailable_message: str | None = None,
+) -> ExtractedContent:
     fetched_at = datetime.now(UTC)
     if not _domain_allowed(tab.domain, settings):
         return ExtractedContent(
@@ -73,7 +108,11 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
         live_rejected_as_too_short = False
 
         if settings.prefer_live_chrome_session:
-            if _skip_live_session_for_domain(tab.domain, settings):
+            if not live_session_available:
+                live_skipped = True
+                live_skip_reason = live_session_unavailable_reason or "live_session_unavailable"
+                live_error = live_session_unavailable_message
+            elif _skip_live_session_for_domain(tab.domain, settings):
                 live_skipped = True
                 live_skip_reason = "domain_skip_list"
                 logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)

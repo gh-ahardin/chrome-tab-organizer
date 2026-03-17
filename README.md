@@ -68,11 +68,53 @@ pip install -e ".[dev]"
 
 3. Copy `.env.example` to `.env` and configure a provider if you want LLM summaries.
 
+4. In Google Chrome, enable:
+   `View > Developer > Allow JavaScript from Apple Events`
+
+   Without that setting, the tool can still fall back to HTTP extraction for public pages, but it cannot read authenticated in-session DOM content such as LinkedIn posts.
+
 4. Run:
 
 ```bash
 chrome-tab-organizer run
 ```
+
+## Enable Chrome Live Session Access
+
+This setting is required if you want the tool to read pages from your active logged-in Chrome session instead of relying only on HTTP refetches.
+
+Why this matters:
+
+- It is required for authenticated pages such as LinkedIn posts.
+- It lets the tool read the live DOM that Chrome is already showing you.
+- Without it, the tool may still work for public pages, but private/session-backed content will usually be missed.
+
+How to enable it in Google Chrome on macOS:
+
+1. Open Google Chrome.
+2. In the menu bar, click `View`.
+3. If you do not see `Developer`, first enable it:
+   `Chrome` > `Settings` > `Advanced` > enable developer-facing options if needed.
+4. In the menu bar, click `View` > `Developer`.
+5. Turn on `Allow JavaScript from Apple Events`.
+
+You may also need to approve macOS Automation permissions:
+
+1. Open `System Settings`.
+2. Go to `Privacy & Security` > `Automation`.
+3. Find your terminal app, such as `Terminal`, `iTerm`, or `Codex`.
+4. Make sure it is allowed to control `Google Chrome`.
+
+Recommended validation command:
+
+```bash
+CTO_REQUIRE_LIVE_CHROME_SESSION=true chrome-tab-organizer run --window-index 1 --sample-tabs 10
+```
+
+Expected behavior:
+
+- If Chrome session access is working, the sample run will proceed normally.
+- If Chrome blocks JavaScript from automation, the run will stop immediately with a clear error instead of silently falling back to HTTP extraction.
 
 ## Configuration
 
@@ -98,6 +140,7 @@ Environment variables are loaded from `.env`.
 | `CTO_MAX_CONCURRENCY` | Concurrent extraction workers |
 | `CTO_LLM_MAX_INPUT_CHARS` | Max extracted text characters sent to LLM |
 | `CTO_PREFER_LIVE_CHROME_SESSION` | Read content from active Chrome session before HTTP fetch |
+| `CTO_REQUIRE_LIVE_CHROME_SESSION` | Fail fast if Chrome session DOM extraction is unavailable instead of silently falling back to HTTP |
 | `CTO_SESSION_EXTRACT_TIMEOUT_SECONDS` | AppleScript timeout for live session extraction |
 | `CTO_SESSION_EXTRACT_ATTEMPTS` | Retry count for live DOM extraction |
 | `CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS` | Delay between live tab activations to reduce Chrome pressure |
@@ -119,6 +162,14 @@ chrome-tab-organizer extract
 chrome-tab-organizer summarize
 chrome-tab-organizer export
 ```
+
+If you need authenticated content from your live Chrome session, the safer operator mode is:
+
+```bash
+CTO_REQUIRE_LIVE_CHROME_SESSION=true chrome-tab-organizer run --window-index 1 --sample-tabs 10
+```
+
+That will stop immediately if Chrome blocks JavaScript from automation, instead of completing with HTTP fallback only.
 
 ## Bedrock Claude
 

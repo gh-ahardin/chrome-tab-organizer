@@ -25,6 +25,7 @@ class Settings(BaseModel):
     max_concurrency: int = 8
     llm_max_input_chars: int = 12000
     prefer_live_chrome_session: bool = True
+    require_live_chrome_session: bool = False
     session_extract_timeout_seconds: float = 8.0
     session_extract_attempts: int = 3
     live_extract_tab_pause_seconds: float = 0.35
@@ -66,6 +67,7 @@ class Settings(BaseModel):
             "max_concurrency": "CTO_MAX_CONCURRENCY",
             "llm_max_input_chars": "CTO_LLM_MAX_INPUT_CHARS",
             "prefer_live_chrome_session": "CTO_PREFER_LIVE_CHROME_SESSION",
+            "require_live_chrome_session": "CTO_REQUIRE_LIVE_CHROME_SESSION",
             "session_extract_timeout_seconds": "CTO_SESSION_EXTRACT_TIMEOUT_SECONDS",
             "session_extract_attempts": "CTO_SESSION_EXTRACT_ATTEMPTS",
             "live_extract_tab_pause_seconds": "CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS",

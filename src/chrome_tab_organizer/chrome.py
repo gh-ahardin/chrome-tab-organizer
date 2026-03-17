@@ -18,6 +18,12 @@ CHROME_RUNNING_SCRIPT = r'''
 application "Google Chrome" is running
 '''
 
+LIVE_SESSION_JS_DISABLED_MARKER = "Executing JavaScript through AppleScript is turned off"
+AUTOMATION_NOT_AUTHORIZED_MARKERS = (
+    "Not authorized to send Apple events",
+    "not authorized to send apple events",
+)
+
 
 def get_chrome_window_count() -> int:
     result = subprocess.run(
@@ -50,6 +56,24 @@ def preflight_chrome_access() -> tuple[bool, str | None]:
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
         return False, f"AppleScript could not access Google Chrome. {detail}"
+
+
+def classify_live_session_error(detail: str) -> tuple[str, str]:
+    message = detail.strip()
+    if LIVE_SESSION_JS_DISABLED_MARKER in message:
+        return (
+            "javascript_from_apple_events_disabled",
+            (
+                "Chrome blocks JavaScript execution from automation. Enable "
+                '"View > Developer > Allow JavaScript from Apple Events" in Google Chrome.'
+            ),
+        )
+    if any(marker in message for marker in AUTOMATION_NOT_AUTHORIZED_MARKERS):
+        return (
+            "automation_not_authorized",
+            "macOS Automation permission to control Google Chrome is denied for this terminal.",
+        )
+    return ("live_session_error", message)
 
 
 def window_tab_listing_script(window_index: int) -> str:
@@ -130,6 +154,34 @@ def discover_window_tabs(
     return tabs
 
 
+def probe_live_javascript_support() -> tuple[bool, str | None, str | None]:
+    ok, error = preflight_chrome_access()
+    if not ok:
+        return False, "chrome_preflight_failed", error
+
+    script = r'''
+const chrome = Application("Google Chrome");
+const windows = chrome.windows();
+if (windows.length < 1) {
+  throw new Error("Google Chrome has no open windows");
+}
+const title = windows[0].activeTab().execute({javascript: "document.title"});
+JSON.stringify({title: String(title || "")});
+'''
+    try:
+        subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return True, None, None
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        reason, message = classify_live_session_error(detail)
+        return False, reason, message
+
+
 def compute_stable_tab_base_key(*, url: str, title: str) -> str:
     normalized_url = normalize_url_for_fingerprint(url)
     normalized_title = " ".join(title.lower().split())
@@ -176,34 +228,49 @@ def capture_live_tab_snapshot(
   });
 })()
 """.strip()
-    apple_script = f'''
-with timeout of {timeout_seconds} seconds
-    tell application "Google Chrome"
-        if (count of windows) < {window_index} then error "Window index out of range"
-        set targetWindow to window {window_index}
-        if (count of tabs of targetWindow) < {tab_index} then error "Tab index out of range"
-        set originalTabIndex to active tab index of targetWindow
-        set index of targetWindow to 1
-        set active tab index of targetWindow to {tab_index}
-        delay 0.15
-        set payload to execute active tab of targetWindow javascript {json.dumps(javascript)}
-        set active tab index of targetWindow to originalTabIndex
-        return payload
-    end tell
-end timeout
-'''
+    script_lines = [
+        f"with timeout of {timeout_seconds} seconds",
+        'tell application "Google Chrome"',
+        f'if (count of windows) < {window_index} then error "Window index out of range"',
+        f'set targetWindow to window {window_index}',
+        f'if (count of tabs of targetWindow) < {tab_index} then error "Tab index out of range"',
+        "set originalTabIndex to active tab index of targetWindow",
+        "try",
+        "set index of targetWindow to 1",
+        f"set active tab index of targetWindow to {tab_index}",
+        "delay 0.15",
+        f"set payload to execute active tab of targetWindow javascript {json.dumps(javascript)}",
+        "set active tab index of targetWindow to originalTabIndex",
+        "return payload",
+        "on error errMsg number errNum",
+        "set active tab index of targetWindow to originalTabIndex",
+        "error errMsg number errNum",
+        "end try",
+        "end tell",
+        "end timeout",
+    ]
     last_error: subprocess.CalledProcessError | None = None
     for _ in range(max(1, attempts)):
         try:
+            command = ["osascript"]
+            for line in script_lines:
+                command.extend(["-e", line])
             result = subprocess.run(
-                ["osascript", "-e", apple_script],
+                command,
                 capture_output=True,
                 text=True,
                 check=True,
             )
             return json.loads(result.stdout)
         except subprocess.CalledProcessError as exc:
-            last_error = exc
+            detail = (exc.stderr or exc.stdout or str(exc)).strip()
+            _, message = classify_live_session_error(detail)
+            last_error = subprocess.CalledProcessError(
+                exc.returncode,
+                exc.cmd,
+                output=exc.output,
+                stderr=message,
+            )
     if last_error is not None:
         raise last_error
     raise RuntimeError("Live tab snapshot failed without a captured subprocess error.")
