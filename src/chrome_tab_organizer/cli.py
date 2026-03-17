@@ -28,7 +28,11 @@ def run_pipeline(
     """Run the full pipeline."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    outputs = pipeline.run(window_index=window_index, dry_run=dry_run, sample_tabs=sample_tabs)
+    try:
+        outputs = pipeline.run(window_index=window_index, dry_run=dry_run, sample_tabs=sample_tabs)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     summary = pipeline.build_run_summary()
     typer.echo(
         f"summary: total={summary.total_tabs} unique={summary.unique_tabs} duplicates={summary.duplicate_tabs} "
@@ -46,7 +50,11 @@ def discover_tabs(
     """Discover tabs from Chrome."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    tabs = pipeline.discover(window_index=window_index, sample_tabs=sample_tabs)
+    try:
+        tabs = pipeline.discover(window_index=window_index, sample_tabs=sample_tabs)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     unique_count = len([tab for tab in tabs if tab.duplicate_of_tab_id is None])
     typer.echo(f"Discovered {len(tabs)} tabs ({unique_count} unique).")
 
@@ -59,7 +67,11 @@ def summarize(
     """Summarize extracted tabs."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    count = pipeline.summarize(window_index=window_index, sample_tabs=sample_tabs)
+    try:
+        count = pipeline.summarize(window_index=window_index, sample_tabs=sample_tabs)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(f"Summarized {count} tabs.")
 
 
@@ -71,7 +83,11 @@ def extract(
     """Fetch and extract content for discovered tabs."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    count = pipeline.extract(window_index=window_index, sample_tabs=sample_tabs)
+    try:
+        count = pipeline.extract(window_index=window_index, sample_tabs=sample_tabs)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(f"Extracted {count} tabs.")
 
 
@@ -82,6 +98,10 @@ def export(
     """Export bookmarks and reports."""
     settings = Settings.load()
     pipeline = OrganizerPipeline(settings)
-    outputs = pipeline.export(window_index=window_index)
+    try:
+        outputs = pipeline.export(window_index=window_index)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     for name, path in outputs.items():
         typer.echo(f"{name}: {path}")

@@ -7,7 +7,7 @@ from collections import Counter
 import hashlib
 
 from chrome_tab_organizer.cache import SQLiteCache
-from chrome_tab_organizer.chrome import discover_window_tabs, get_chrome_window_count
+from chrome_tab_organizer.chrome import discover_window_tabs, get_chrome_window_count, preflight_chrome_access
 from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.enrichment import build_topic_groups, enrich_tabs, is_medical_priority, rank_pages
 from chrome_tab_organizer.exporters import (
@@ -44,6 +44,9 @@ class OrganizerPipeline:
         occurrence_counts: dict[str, int] = {}
         canonical_ids: dict[str, str] = {}
         try:
+            ok, error = preflight_chrome_access()
+            if not ok:
+                raise RuntimeError(error or "Google Chrome preflight failed.")
             max_windows = get_chrome_window_count()
             target_windows = [window_index] if window_index is not None else list(range(1, max_windows + 1))
             for current_window in target_windows:

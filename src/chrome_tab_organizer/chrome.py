@@ -14,6 +14,10 @@ tell application "Google Chrome"
 end tell
 '''
 
+CHROME_RUNNING_SCRIPT = r'''
+application "Google Chrome" is running
+'''
+
 
 def get_chrome_window_count() -> int:
     result = subprocess.run(
@@ -25,46 +29,45 @@ def get_chrome_window_count() -> int:
     return int(result.stdout.strip() or "0")
 
 
+def is_chrome_running() -> bool:
+    result = subprocess.run(
+        ["osascript", "-e", CHROME_RUNNING_SCRIPT],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip().lower() == "true"
+
+
+def preflight_chrome_access() -> tuple[bool, str | None]:
+    try:
+        if not is_chrome_running():
+            return False, "Google Chrome is not running."
+        window_count = get_chrome_window_count()
+        if window_count < 1:
+            return False, "Google Chrome is running but has no open windows."
+        return True, None
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        return False, f"AppleScript could not access Google Chrome. {detail}"
+
+
 def window_tab_listing_script(window_index: int) -> str:
     return rf'''
-set output to "["
-tell application "Google Chrome"
-    if (count of windows) < {window_index} then error "Window index out of range"
-    set tabCount to count of tabs of window {window_index}
-    repeat with t from 1 to tabCount
-        set tabTitle to title of tab t of window {window_index}
-        set tabURL to URL of tab t of window {window_index}
-        set jsonItem to "{{""window_index"":{window_index},""tab_index"":" & t & ",""title"":" & my json_quote(tabTitle) & ",""url"":" & my json_quote(tabURL) & "}}"
-        if output is not "[" then
-            set output to output & ","
-        end if
-        set output to output & jsonItem
-    end repeat
-end tell
-set output to output & "]"
-return output
-
-on json_quote(inputText)
-    if inputText is missing value then
-        return "\"\""
-    end if
-    set escapedText to inputText
-    set escapedText to my replace_text("\\", "\\\\", escapedText)
-    set escapedText to my replace_text("\"", "\\\"", escapedText)
-    set escapedText to my replace_text(return, "\\n", escapedText)
-    set escapedText to my replace_text(linefeed, "\\n", escapedText)
-    set escapedText to my replace_text(tab, "\\t", escapedText)
-    return "\"" & escapedText & "\""
-end json_quote
-
-on replace_text(search_string, replacement_string, source_text)
-    set AppleScript's text item delimiters to search_string
-    set text_items to every text item of source_text
-    set AppleScript's text item delimiters to replacement_string
-    set source_text to text_items as string
-    set AppleScript's text item delimiters to ""
-    return source_text
-end replace_text
+const chrome = Application("Google Chrome");
+const windows = chrome.windows();
+if (windows.length < {window_index}) {{
+  throw new Error("Window index out of range");
+}}
+const targetWindow = windows[{window_index - 1}];
+const tabs = targetWindow.tabs();
+const payload = tabs.map((tab, idx) => ({{
+  window_index: {window_index},
+  tab_index: idx + 1,
+  title: String(tab.title() || ""),
+  url: String(tab.url() || "")
+}}));
+JSON.stringify(payload);
 '''
 
 
@@ -81,24 +84,27 @@ def discover_window_tabs(
     occurrence_counts: dict[str, int] | None = None,
     canonical_ids: dict[str, str] | None = None,
 ) -> list[ChromeTab]:
+    ok, error = preflight_chrome_access()
+    if not ok:
+        raise RuntimeError(error or "Google Chrome preflight failed.")
     result = subprocess.run(
-        ["osascript", "-e", window_tab_listing_script(window_index)],
+        ["osascript", "-l", "JavaScript", "-e", window_tab_listing_script(window_index)],
         capture_output=True,
         text=True,
         check=True,
     )
-    payload = json.loads(result.stdout)
     discovered_at = datetime.now(UTC)
     counts = occurrence_counts if occurrence_counts is not None else {}
     canonical_by_fingerprint = canonical_ids if canonical_ids is not None else {}
     tabs: list[ChromeTab] = []
+    payload = json.loads(result.stdout or "[]")
     for item in payload:
-        url = item.get("url", "").strip()
+        url = str(item.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             continue
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
-        title = (item.get("title") or parsed.path or domain).strip()[:500]
+        title = (str(item.get("title") or "") or parsed.path or domain).strip()[:500]
         base_key = compute_stable_tab_base_key(url=url, title=title)
         counts[base_key] = counts.get(base_key, 0) + 1
         stable_key = f"{base_key}-{counts[base_key]}"
@@ -110,8 +116,8 @@ def discover_window_tabs(
                 tab_id=stable_key,
                 stable_key=stable_key,
                 fingerprint_key=base_key,
-                window_index=item["window_index"],
-                tab_index=item["tab_index"],
+                window_index=int(item["window_index"]),
+                tab_index=int(item["tab_index"]),
                 title=title,
                 url=url,
                 domain=domain,
