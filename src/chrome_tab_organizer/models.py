@@ -54,6 +54,14 @@ class ExtractedContent(BaseModel):
     raw_text: str = ""
     text_char_count: int = 0
     extraction_method: str = "none"
+    live_session_attempted: bool = False
+    live_session_succeeded: bool = False
+    live_session_skipped: bool = False
+    live_session_skip_reason: str | None = None
+    live_session_error: str | None = None
+    live_session_text_char_count: int = 0
+    live_session_rejected_as_too_short: bool = False
+    http_fallback_used: bool = False
     fetched_at: datetime
     error: str | None = None
 
@@ -111,6 +119,11 @@ class RunSummary(BaseModel):
     extracted_tabs: int
     summarized_tabs: int
     failed_tabs: int
+    live_session_attempted_tabs: int
+    live_session_succeeded_tabs: int
+    live_session_skipped_tabs: int
+    live_session_too_short_tabs: int
+    live_session_failed_tabs: int
     live_dom_extractions: int
     http_fallback_extractions: int
     medical_priority_tabs: int

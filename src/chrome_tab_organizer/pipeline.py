@@ -215,6 +215,27 @@ class OrganizerPipeline:
             if (record.content and record.content.error) or record.status.name == "failed"
         ]
         failure_domains = Counter(record.tab.domain for record in failed_records)
+        live_attempted = sum(
+            1 for record in extracted_records if record.content and record.content.live_session_attempted
+        )
+        live_succeeded = sum(
+            1 for record in extracted_records if record.content and record.content.live_session_succeeded
+        )
+        live_skipped = sum(
+            1 for record in extracted_records if record.content and record.content.live_session_skipped
+        )
+        live_too_short = sum(
+            1
+            for record in extracted_records
+            if record.content and record.content.live_session_rejected_as_too_short
+        )
+        live_failed = sum(
+            1
+            for record in extracted_records
+            if record.content
+            and record.content.live_session_attempted
+            and not record.content.live_session_succeeded
+        )
         live_dom = sum(
             1
             for record in extracted_records
@@ -239,6 +260,11 @@ class OrganizerPipeline:
             extracted_tabs=len(extracted_records),
             summarized_tabs=len(summarized_records),
             failed_tabs=len(failed_records),
+            live_session_attempted_tabs=live_attempted,
+            live_session_succeeded_tabs=live_succeeded,
+            live_session_skipped_tabs=live_skipped,
+            live_session_too_short_tabs=live_too_short,
+            live_session_failed_tabs=live_failed,
             live_dom_extractions=live_dom,
             http_fallback_extractions=http_fallback,
             medical_priority_tabs=medical_priority,

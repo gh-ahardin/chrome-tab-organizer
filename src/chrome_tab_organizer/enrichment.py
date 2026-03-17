@@ -51,8 +51,8 @@ def enrich_tabs(
         enrichments.append(
             TabEnrichment(
                 tab_id=tab.tab_id,
-                topic=topic,
-                topic_reason=summary.why_it_matters,
+                topic=topic[:120],
+                topic_reason=summary.why_it_matters[:400],
                 summary=summary,
                 summarized_at=datetime.now(UTC),
                 provider=settings.provider,

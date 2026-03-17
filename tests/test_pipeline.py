@@ -62,6 +62,9 @@ def test_run_summary_counts_duplicates_and_failures(tmp_path) -> None:
             raw_text="Clinical trial content",
             text_char_count=22,
             extraction_method="chrome_live_dom",
+            live_session_attempted=True,
+            live_session_succeeded=True,
+            live_session_text_char_count=22,
             fetched_at=discovered_at,
         )
     )
@@ -95,6 +98,9 @@ def test_run_summary_counts_duplicates_and_failures(tmp_path) -> None:
             raw_text="",
             text_char_count=0,
             extraction_method="error",
+            live_session_attempted=True,
+            live_session_succeeded=False,
+            live_session_error="boom",
             fetched_at=discovered_at,
             error="boom",
         )
@@ -104,6 +110,9 @@ def test_run_summary_counts_duplicates_and_failures(tmp_path) -> None:
     assert summary.unique_tabs == 2
     assert summary.duplicate_tabs == 1
     assert summary.failed_tabs == 1
+    assert summary.live_session_attempted_tabs == 2
+    assert summary.live_session_succeeded_tabs == 1
+    assert summary.live_session_failed_tabs == 1
     assert summary.live_dom_extractions == 1
     assert summary.medical_priority_tabs == 1
 

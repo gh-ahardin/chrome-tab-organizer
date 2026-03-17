@@ -57,15 +57,51 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
             raw_text="",
             text_char_count=0,
             extraction_method="skipped_by_domain_filter",
+            live_session_skipped=True,
+            live_session_skip_reason="domain_filter",
             fetched_at=fetched_at,
             error="Skipped by domain filter.",
         )
 
     try:
-        if settings.prefer_live_chrome_session and not _skip_live_session_for_domain(tab.domain, settings):
-            live_content = extract_from_live_session(tab, settings, fetched_at)
-            if live_content and live_content.text_char_count >= settings.min_live_extract_chars:
-                return live_content
+        live_attempted = False
+        live_succeeded = False
+        live_skipped = False
+        live_skip_reason: str | None = None
+        live_error: str | None = None
+        live_text_char_count = 0
+        live_rejected_as_too_short = False
+
+        if settings.prefer_live_chrome_session:
+            if _skip_live_session_for_domain(tab.domain, settings):
+                live_skipped = True
+                live_skip_reason = "domain_skip_list"
+                logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)
+            else:
+                live_attempted = True
+                live_content, live_error = extract_from_live_session(tab, settings, fetched_at)
+                if live_content:
+                    live_text_char_count = live_content.text_char_count
+                    if live_content.text_char_count >= settings.min_live_extract_chars:
+                        logger.info(
+                            "Live session extraction succeeded for %s (%s chars)",
+                            tab.tab_id,
+                            live_text_char_count,
+                        )
+                        live_content.live_session_attempted = True
+                        live_content.live_session_succeeded = True
+                        live_content.live_session_error = live_error
+                        live_content.live_session_text_char_count = live_text_char_count
+                        return live_content
+                    live_succeeded = True
+                    live_rejected_as_too_short = True
+                    logger.info(
+                        "Live session extraction too short for %s (%s chars), falling back to HTTP",
+                        tab.tab_id,
+                        live_text_char_count,
+                    )
+                else:
+                    logger.info("Live session extraction failed for %s: %s", tab.tab_id, live_error)
 
         with httpx.Client(
             follow_redirects=True,
@@ -115,6 +151,14 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
             raw_text=raw_text,
             text_char_count=len(raw_text),
             extraction_method=method,
+            live_session_attempted=live_attempted,
+            live_session_succeeded=live_succeeded,
+            live_session_skipped=live_skipped,
+            live_session_skip_reason=live_skip_reason,
+            live_session_error=live_error,
+            live_session_text_char_count=live_text_char_count,
+            live_session_rejected_as_too_short=live_rejected_as_too_short,
+            http_fallback_used=True,
             fetched_at=fetched_at,
             error=(
                 f"Non-200 status during HTTP fallback: {response.status_code}"
@@ -130,6 +174,7 @@ def extract_single_tab(tab: ChromeTab, settings: Settings) -> ExtractedContent:
             raw_text="",
             text_char_count=0,
             extraction_method="error",
+            http_fallback_used=False,
             fetched_at=fetched_at,
             error=str(exc),
         )
@@ -143,19 +188,19 @@ def extract_from_live_session(
     tab: ChromeTab,
     settings: Settings,
     fetched_at: datetime,
-) -> ExtractedContent | None:
+) -> tuple[ExtractedContent | None, str | None]:
     try:
         snapshot = _capture_live_tab_snapshot_with_retry(tab, settings)
     except Exception as exc:  # noqa: BLE001
-        logger.info("Live session extraction unavailable for %s: %s", tab.tab_id, exc)
-        return None
+        return None, str(exc)
 
     raw_text = (str(snapshot.get("text") or "")).strip()
     if not raw_text:
-        return None
+        return None, "Live session returned no text."
 
     final_url = str(snapshot.get("url") or tab.url)
-    return ExtractedContent(
+    return (
+        ExtractedContent(
         tab_id=tab.tab_id,
         final_url=final_url,
         status_code=200,
@@ -165,7 +210,12 @@ def extract_from_live_session(
         raw_text=raw_text,
         text_char_count=int(snapshot.get("text_char_count") or len(raw_text)),
         extraction_method="chrome_live_dom",
+        live_session_attempted=True,
+        live_session_succeeded=True,
+        live_session_text_char_count=int(snapshot.get("text_char_count") or len(raw_text)),
         fetched_at=fetched_at,
+        ),
+        None,
     )
 
 
