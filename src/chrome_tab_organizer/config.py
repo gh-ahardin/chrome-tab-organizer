@@ -14,6 +14,12 @@ class Settings(BaseModel):
     api_key: str = ""
     base_url: str | None = None
     anthropic_version: str = "2023-06-01"
+    aws_region: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_bearer_token_bedrock: str | None = None
+    bedrock_model_id: str | None = None
     max_tabs: int | None = None
     fetch_timeout_seconds: float = 20.0
     max_concurrency: int = 8
@@ -39,6 +45,12 @@ class Settings(BaseModel):
             "api_key": "CTO_API_KEY",
             "base_url": "CTO_BASE_URL",
             "anthropic_version": "CTO_ANTHROPIC_VERSION",
+            "aws_region": "CTO_AWS_REGION",
+            "aws_access_key_id": "AWS_ACCESS_KEY_ID",
+            "aws_secret_access_key": "AWS_SECRET_ACCESS_KEY",
+            "aws_session_token": "AWS_SESSION_TOKEN",
+            "aws_bearer_token_bedrock": "AWS_BEARER_TOKEN_BEDROCK",
+            "bedrock_model_id": "CTO_BEDROCK_MODEL_ID",
             "max_tabs": "CTO_MAX_TABS",
             "fetch_timeout_seconds": "CTO_FETCH_TIMEOUT_SECONDS",
             "max_concurrency": "CTO_MAX_CONCURRENCY",
@@ -61,7 +73,7 @@ class Settings(BaseModel):
     @field_validator("provider")
     @classmethod
     def validate_provider(cls, value: str) -> str:
-        allowed = {"none", "openai_compatible", "anthropic"}
+        allowed = {"none", "openai_compatible", "anthropic", "bedrock"}
         normalized = value.strip().lower()
         if normalized not in allowed:
             raise ValueError(f"provider must be one of {sorted(allowed)}")

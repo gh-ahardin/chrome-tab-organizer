@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -112,6 +113,60 @@ class AnthropicClient(LLMClient):
         return PageSummary.model_validate(parsed)
 
 
+class BedrockClaudeClient(LLMClient):
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        try:
+            import boto3
+        except ModuleNotFoundError as exc:  # pragma: no cover - depends on local install state
+            raise RuntimeError(
+                "boto3 is required for the bedrock provider. Install project dependencies first."
+            ) from exc
+        if not settings.aws_region:
+            raise ValueError("CTO_AWS_REGION is required for bedrock provider.")
+        model_id = settings.bedrock_model_id or settings.model
+        if not model_id:
+            raise ValueError("CTO_BEDROCK_MODEL_ID or CTO_MODEL is required for bedrock provider.")
+        self.model_id = model_id
+        if settings.aws_bearer_token_bedrock:
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = settings.aws_bearer_token_bedrock
+        session_kwargs: dict[str, str] = {"region_name": settings.aws_region}
+        if settings.aws_access_key_id:
+            session_kwargs["aws_access_key_id"] = settings.aws_access_key_id
+        if settings.aws_secret_access_key:
+            session_kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+        if settings.aws_session_token:
+            session_kwargs["aws_session_token"] = settings.aws_session_token
+        session = boto3.session.Session(**session_kwargs)
+        self.client = session.client("bedrock-runtime")
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type((ValidationError, json.JSONDecodeError)),
+        reraise=True,
+    )
+    def summarize_page(self, prompt: str) -> PageSummary:
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1200,
+            "temperature": 0.1,
+            "system": _system_prompt(),
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        response = self.client.invoke_model(
+            modelId=self.model_id,
+            body=json.dumps(payload).encode("utf-8"),
+            contentType="application/json",
+            accept="application/json",
+        )
+        body = json.loads(response["body"].read())
+        chunks = body.get("content", [])
+        text = "".join(chunk.get("text", "") for chunk in chunks if chunk.get("type") == "text")
+        parsed = _extract_json_object(text)
+        return PageSummary.model_validate(parsed)
+
+
 def build_llm_client(settings: Settings) -> LLMClient:
     if settings.provider == "none":
         return HeuristicLLMClient(settings)
@@ -119,6 +174,8 @@ def build_llm_client(settings: Settings) -> LLMClient:
         return OpenAICompatibleClient(settings)
     if settings.provider == "anthropic":
         return AnthropicClient(settings)
+    if settings.provider == "bedrock":
+        return BedrockClaudeClient(settings)
     raise ValueError(f"Unsupported provider: {settings.provider}")
 
 

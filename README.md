@@ -9,7 +9,7 @@ It is designed for large browsing sessions of roughly 300 to 500 tabs, with resu
 - Privacy-aware by default
 - Local cache and resumable processing
 - macOS Chrome tab discovery
-- Support for Anthropic and OpenAI-compatible APIs
+- Support for Anthropic, AWS Bedrock Claude, and OpenAI-compatible APIs
 - Strict Pydantic validation for model outputs
 - Topic-grouped bookmark export
 - Final report with a "Top 10 pages to read next"
@@ -81,11 +81,17 @@ Environment variables are loaded from `.env`.
 | --- | --- |
 | `CTO_DB_PATH` | SQLite database path |
 | `CTO_OUTPUT_DIR` | Output directory |
-| `CTO_PROVIDER` | `openai_compatible`, `anthropic`, or `none` |
+| `CTO_PROVIDER` | `openai_compatible`, `anthropic`, `bedrock`, or `none` |
 | `CTO_MODEL` | Model name |
 | `CTO_API_KEY` | API key |
 | `CTO_BASE_URL` | Base URL for OpenAI-compatible providers |
 | `CTO_ANTHROPIC_VERSION` | Anthropic API version header |
+| `CTO_AWS_REGION` | AWS region for Bedrock |
+| `AWS_ACCESS_KEY_ID` | AWS access key for Bedrock |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key for Bedrock |
+| `AWS_SESSION_TOKEN` | Optional AWS session token for Bedrock |
+| `AWS_BEARER_TOKEN_BEDROCK` | Bedrock API key / bearer token for Bedrock API-key auth |
+| `CTO_BEDROCK_MODEL_ID` | Bedrock model ID, for example a Claude model ARN or model name |
 | `CTO_MAX_TABS` | Optional cap for tabs processed |
 | `CTO_FETCH_TIMEOUT_SECONDS` | HTTP fetch timeout |
 | `CTO_MAX_CONCURRENCY` | Concurrent extraction workers |
@@ -108,6 +114,19 @@ chrome-tab-organizer extract
 chrome-tab-organizer summarize
 chrome-tab-organizer export
 ```
+
+## Bedrock Claude
+
+To use Claude through AWS Bedrock, set:
+
+```bash
+CTO_PROVIDER=bedrock
+CTO_AWS_REGION=us-west-2
+AWS_BEARER_TOKEN_BEDROCK=...
+CTO_BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+```
+
+You can use either standard AWS credentials or `AWS_BEARER_TOKEN_BEDROCK`. Amazon’s current Bedrock docs explicitly recognize `AWS_BEARER_TOKEN_BEDROCK` as the environment variable for Bedrock API-key auth.
 
 ## Project structure
 
