@@ -15,10 +15,34 @@ from chrome_tab_organizer.models import PageSummary
 
 logger = logging.getLogger(__name__)
 
+SUMMARY_LIMITS = {
+    "summary": 1200,
+    "why_it_matters": 600,
+    "category": 120,
+}
+LIST_LIMITS = {
+    "topic_candidates": 8,
+    "key_points": 8,
+    "follow_up_actions": 6,
+}
+LIST_ITEM_LIMITS = {
+    "topic_candidates": 120,
+    "key_points": 240,
+    "follow_up_actions": 240,
+}
+
 
 class LLMClient(ABC):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
+    @property
+    def provider_name(self) -> str:
+        return self.settings.provider
+
+    @property
+    def model_name(self) -> str:
+        return self.settings.model
 
     @abstractmethod
     def summarize_page(self, prompt: str) -> PageSummary:
@@ -31,6 +55,14 @@ class NoopLLMClient(LLMClient):
 
 
 class HeuristicLLMClient(LLMClient):
+    @property
+    def provider_name(self) -> str:
+        return "none"
+
+    @property
+    def model_name(self) -> str:
+        return "heuristic"
+
     def summarize_page(self, prompt: str) -> PageSummary:
         lines = [line.strip() for line in prompt.splitlines() if line.strip()]
         title = next((line.removeprefix("TITLE: ").strip() for line in lines if line.startswith("TITLE: ")), "Untitled")
@@ -81,7 +113,7 @@ class OpenAICompatibleClient(LLMClient):
         body = response.json()
         content = body["choices"][0]["message"]["content"]
         parsed = json.loads(content)
-        return PageSummary.model_validate(parsed)
+        return _validate_page_summary(parsed)
 
 
 class AnthropicClient(LLMClient):
@@ -110,7 +142,7 @@ class AnthropicClient(LLMClient):
         chunks = body.get("content", [])
         text = "".join(chunk.get("text", "") for chunk in chunks if chunk.get("type") == "text")
         parsed = _extract_json_object(text)
-        return PageSummary.model_validate(parsed)
+        return _validate_page_summary(parsed)
 
 
 class BedrockClaudeClient(LLMClient):
@@ -140,6 +172,10 @@ class BedrockClaudeClient(LLMClient):
         session = boto3.session.Session(**session_kwargs)
         self.client = session.client("bedrock-runtime")
 
+    @property
+    def model_name(self) -> str:
+        return self.model_id
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=8),
@@ -164,7 +200,7 @@ class BedrockClaudeClient(LLMClient):
         chunks = body.get("content", [])
         text = "".join(chunk.get("text", "") for chunk in chunks if chunk.get("type") == "text")
         parsed = _extract_json_object(text)
-        return PageSummary.model_validate(parsed)
+        return _validate_page_summary(parsed)
 
 
 def build_llm_client(settings: Settings) -> LLMClient:
@@ -185,6 +221,32 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     if start == -1 or end == -1 or end <= start:
         raise json.JSONDecodeError("No JSON object found.", text, 0)
     return json.loads(text[start : end + 1])
+
+
+def _validate_page_summary(parsed: dict[str, Any]) -> PageSummary:
+    return PageSummary.model_validate(_normalize_page_summary_payload(parsed))
+
+
+def _normalize_page_summary_payload(parsed: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(parsed)
+    for field_name, max_length in SUMMARY_LIMITS.items():
+        value = normalized.get(field_name)
+        if value is not None:
+            normalized[field_name] = str(value).strip()[:max_length]
+
+    for field_name, max_items in LIST_LIMITS.items():
+        raw_items = normalized.get(field_name)
+        if raw_items is None:
+            continue
+        if not isinstance(raw_items, list):
+            raw_items = [raw_items]
+        item_limit = LIST_ITEM_LIMITS[field_name]
+        normalized[field_name] = [
+            str(item).strip()[:item_limit]
+            for item in raw_items[:max_items]
+            if str(item).strip()
+        ]
+    return normalized
 
 
 def _system_prompt() -> str:

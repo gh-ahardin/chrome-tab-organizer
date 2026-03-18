@@ -55,8 +55,8 @@ def enrich_tabs(
                 topic_reason=summary.why_it_matters[:400],
                 summary=summary,
                 summarized_at=datetime.now(UTC),
-                provider=settings.provider,
-                model=settings.model or "heuristic",
+                provider=client.provider_name,
+                model=client.model_name,
             )
         )
     return enrichments
