@@ -1,7 +1,13 @@
+import subprocess
 from datetime import UTC, datetime
 
 from chrome_tab_organizer.config import Settings
-from chrome_tab_organizer.extraction import extract_from_live_session, extract_single_tab, extract_tabs
+from chrome_tab_organizer.extraction import (
+    _capture_live_tab_snapshot_with_retry,
+    extract_from_live_session,
+    extract_single_tab,
+    extract_tabs,
+)
 from chrome_tab_organizer.models import ChromeTab, ExtractedContent
 
 
@@ -224,3 +230,37 @@ def test_extract_from_live_session_falls_back_from_chrome_error_url(monkeypatch)
     assert error is None
     assert content is not None
     assert str(content.final_url) == "https://example.com/original"
+
+
+def test_capture_live_tab_snapshot_fails_fast_for_tab_index_change(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="tab-moving",
+        stable_key="tab-moving",
+        fingerprint_key="tab-moving",
+        window_index=1,
+        tab_index=1,
+        title="Example",
+        url="https://example.com/original",
+        domain="example.com",
+        discovered_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    settings = Settings(session_extract_attempts=3)
+    calls = {"count": 0}
+
+    def raise_tab_change(*args, **kwargs):
+        calls["count"] += 1
+        raise subprocess.CalledProcessError(1, ["osascript"], output="", stderr="Tab index out of range")
+
+    monkeypatch.setattr("chrome_tab_organizer.extraction.capture_live_tab_snapshot", raise_tab_change)
+
+    try:
+        _capture_live_tab_snapshot_with_retry(tab, settings, activation_delay_seconds=0.2)
+    except RuntimeError as exc:
+        assert "tab index changed" in str(exc).lower()
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected RuntimeError for tab index change")
+
+    assert calls["count"] == 1

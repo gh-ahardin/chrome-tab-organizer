@@ -19,6 +19,8 @@ application "Google Chrome" is running
 '''
 
 LIVE_SESSION_JS_DISABLED_MARKER = "Executing JavaScript through AppleScript is turned off"
+WINDOW_INDEX_OUT_OF_RANGE_MARKER = "Window index out of range"
+TAB_INDEX_OUT_OF_RANGE_MARKER = "Tab index out of range"
 AUTOMATION_NOT_AUTHORIZED_MARKERS = (
     "Not authorized to send Apple events",
     "not authorized to send apple events",
@@ -60,6 +62,10 @@ def preflight_chrome_access() -> tuple[bool, str | None]:
 
 def classify_live_session_error(detail: str) -> tuple[str, str]:
     message = detail.strip()
+    if TAB_INDEX_OUT_OF_RANGE_MARKER in message:
+        return ("tab_index_out_of_range", "Chrome tab index changed during extraction.")
+    if WINDOW_INDEX_OUT_OF_RANGE_MARKER in message:
+        return ("window_index_out_of_range", "Chrome window index changed during extraction.")
     if LIVE_SESSION_JS_DISABLED_MARKER in message:
         return (
             "javascript_from_apple_events_disabled",
@@ -271,31 +277,26 @@ def capture_live_tab_snapshot(
         activation_delay_seconds=activation_delay_seconds,
         javascript=javascript,
     )
-    last_error: subprocess.CalledProcessError | None = None
-    for _ in range(max(1, attempts)):
-        try:
-            command = ["osascript"]
-            for line in script_lines:
-                command.extend(["-e", line])
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return json.loads(result.stdout)
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or exc.stdout or str(exc)).strip()
-            _, message = classify_live_session_error(detail)
-            last_error = subprocess.CalledProcessError(
-                exc.returncode,
-                exc.cmd,
-                output=exc.output,
-                stderr=message,
-            )
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("Live tab snapshot failed without a captured subprocess error.")
+    command = ["osascript"]
+    for line in script_lines:
+        command.extend(["-e", line])
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        _, message = classify_live_session_error(detail)
+        raise subprocess.CalledProcessError(
+            exc.returncode,
+            exc.cmd,
+            output=exc.output,
+            stderr=message,
+        ) from exc
 
 
 def build_live_snapshot_script_lines(

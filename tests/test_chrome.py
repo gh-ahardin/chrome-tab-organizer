@@ -45,6 +45,12 @@ def test_classify_live_session_error_for_disabled_js() -> None:
     assert "Allow JavaScript from Apple Events" in message
 
 
+def test_classify_live_session_error_for_tab_index_change() -> None:
+    reason, message = classify_live_session_error("Tab index out of range")
+    assert reason == "tab_index_out_of_range"
+    assert "tab index changed" in message.lower()
+
+
 def test_probe_live_javascript_support_reports_disabled_js(monkeypatch) -> None:
     monkeypatch.setattr("chrome_tab_organizer.chrome.preflight_chrome_access", lambda: (True, None))
 

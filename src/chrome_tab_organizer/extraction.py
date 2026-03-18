@@ -3,14 +3,18 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 from datetime import UTC, datetime
+import subprocess
 import time
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from chrome_tab_organizer.chrome import capture_live_tab_snapshot, probe_live_javascript_support
+from chrome_tab_organizer.chrome import (
+    capture_live_tab_snapshot,
+    classify_live_session_error,
+    probe_live_javascript_support,
+)
 from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.models import ChromeTab, ExtractedContent
 
@@ -93,6 +97,8 @@ def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedCon
         for index, tab in enumerate(tabs):
             if index > 0 and settings.live_extract_tab_pause_seconds > 0:
                 time.sleep(settings.live_extract_tab_pause_seconds)
+            if index and index % 25 == 0:
+                logger.info("Extraction progress: %s/%s tabs", index, len(tabs))
             contents.append(
                 extract_single_tab(
                     tab,
@@ -313,22 +319,33 @@ def extract_from_live_session(
         None,
     )
 
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_fixed(1),
-    retry=retry_if_exception_type(Exception),
-    reraise=True,
-)
 def _capture_live_tab_snapshot_with_retry(
     tab: ChromeTab,
     settings: Settings,
     activation_delay_seconds: float,
 ) -> dict[str, str | int | None]:
-    return capture_live_tab_snapshot(
-        window_index=tab.window_index,
-        tab_index=tab.tab_index,
-        timeout_seconds=settings.session_extract_timeout_seconds,
-        attempts=settings.session_extract_attempts,
-        activation_delay_seconds=activation_delay_seconds,
-    )
+    max_attempts = max(1, settings.session_extract_attempts)
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return capture_live_tab_snapshot(
+                window_index=tab.window_index,
+                tab_index=tab.tab_index,
+                timeout_seconds=settings.session_extract_timeout_seconds,
+                attempts=1,
+                activation_delay_seconds=activation_delay_seconds,
+            )
+        except subprocess.CalledProcessError as exc:
+            reason, message = classify_live_session_error(exc.stderr or exc.stdout or str(exc))
+            if reason in {"tab_index_out_of_range", "window_index_out_of_range"}:
+                raise RuntimeError(message) from exc
+            last_error = RuntimeError(message)
+            if attempt < max_attempts:
+                time.sleep(1)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt < max_attempts:
+                time.sleep(1)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Live tab snapshot failed without a captured error.")
