@@ -60,6 +60,13 @@ def _live_session_min_chars(domain: str, settings: Settings) -> int:
     return settings.min_live_extract_chars
 
 
+def _safe_final_url(candidate_url: str | None, fallback_url: str) -> str:
+    value = (candidate_url or "").strip()
+    if value.startswith(("http://", "https://")):
+        return value
+    return fallback_url
+
+
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
     live_session_available = settings.prefer_live_chrome_session
     live_session_unavailable_reason: str | None = None
@@ -229,7 +236,7 @@ def extract_single_tab(
 
         return ExtractedContent(
             tab_id=tab.tab_id,
-            final_url=str(response.url),
+            final_url=_safe_final_url(str(response.url), str(tab.url)),
             status_code=response.status_code,
             content_type=response.headers.get("content-type"),
             title=title[:500],
@@ -286,7 +293,7 @@ def extract_from_live_session(
     if not raw_text:
         return None, "Live session returned no text."
 
-    final_url = str(snapshot.get("url") or tab.url)
+    final_url = _safe_final_url(str(snapshot.get("url") or ""), str(tab.url))
     return (
         ExtractedContent(
         tab_id=tab.tab_id,

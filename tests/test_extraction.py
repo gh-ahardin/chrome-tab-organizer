@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from chrome_tab_organizer.config import Settings
-from chrome_tab_organizer.extraction import extract_single_tab, extract_tabs
+from chrome_tab_organizer.extraction import extract_from_live_session, extract_single_tab, extract_tabs
 from chrome_tab_organizer.models import ChromeTab, ExtractedContent
 
 
@@ -186,3 +186,41 @@ def test_extract_single_tab_retries_live_session_with_longer_delay(monkeypatch) 
     assert attempts == [0.2, 1.2]
     assert content.extraction_method == "chrome_live_dom"
     assert content.live_session_succeeded is True
+
+
+def test_extract_from_live_session_falls_back_from_chrome_error_url(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="tab-chrome-error",
+        stable_key="tab-chrome-error",
+        fingerprint_key="tab-chrome-error",
+        window_index=1,
+        tab_index=1,
+        title="Example",
+        url="https://example.com/original",
+        domain="example.com",
+        discovered_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    settings = Settings(prefer_live_chrome_session=True)
+
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction._capture_live_tab_snapshot_with_retry",
+        lambda *args, **kwargs: {
+            "title": "Error page",
+            "url": "chrome-error://chromewebdata/",
+            "text": "Recovered text",
+            "text_char_count": 14,
+        },
+    )
+
+    content, error = extract_from_live_session(
+        tab,
+        settings,
+        now,
+        activation_delay_seconds=0.2,
+    )
+    assert error is None
+    assert content is not None
+    assert str(content.final_url) == "https://example.com/original"

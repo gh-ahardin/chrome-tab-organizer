@@ -1,6 +1,7 @@
 import subprocess
 
 from chrome_tab_organizer.chrome import (
+    build_live_snapshot_script_lines,
     classify_live_session_error,
     preflight_chrome_access,
     probe_live_javascript_support,
@@ -60,3 +61,14 @@ def test_probe_live_javascript_support_reports_disabled_js(monkeypatch) -> None:
     assert ok is False
     assert reason == "javascript_from_apple_events_disabled"
     assert "Allow JavaScript from Apple Events" in (message or "")
+
+
+def test_live_snapshot_script_does_not_reorder_windows() -> None:
+    script_lines = build_live_snapshot_script_lines(
+        window_index=2,
+        tab_index=3,
+        timeout_seconds=8.0,
+        activation_delay_seconds=0.2,
+        javascript="document.title",
+    )
+    assert not any("set index of targetWindow to 1" in line for line in script_lines)

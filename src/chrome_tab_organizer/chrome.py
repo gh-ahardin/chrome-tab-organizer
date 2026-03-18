@@ -264,27 +264,13 @@ def capture_live_tab_snapshot(
   });
 })()
 """.strip()
-    script_lines = [
-        f"with timeout of {timeout_seconds} seconds",
-        'tell application "Google Chrome"',
-        f'if (count of windows) < {window_index} then error "Window index out of range"',
-        f'set targetWindow to window {window_index}',
-        f'if (count of tabs of targetWindow) < {tab_index} then error "Tab index out of range"',
-        "set originalTabIndex to active tab index of targetWindow",
-        "try",
-        "set index of targetWindow to 1",
-        f"set active tab index of targetWindow to {tab_index}",
-        f"delay {activation_delay_seconds}",
-        f"set payload to execute active tab of targetWindow javascript {json.dumps(javascript)}",
-        "set active tab index of targetWindow to originalTabIndex",
-        "return payload",
-        "on error errMsg number errNum",
-        "set active tab index of targetWindow to originalTabIndex",
-        "error errMsg number errNum",
-        "end try",
-        "end tell",
-        "end timeout",
-    ]
+    script_lines = build_live_snapshot_script_lines(
+        window_index=window_index,
+        tab_index=tab_index,
+        timeout_seconds=timeout_seconds,
+        activation_delay_seconds=activation_delay_seconds,
+        javascript=javascript,
+    )
     last_error: subprocess.CalledProcessError | None = None
     for _ in range(max(1, attempts)):
         try:
@@ -310,3 +296,33 @@ def capture_live_tab_snapshot(
     if last_error is not None:
         raise last_error
     raise RuntimeError("Live tab snapshot failed without a captured subprocess error.")
+
+
+def build_live_snapshot_script_lines(
+    *,
+    window_index: int,
+    tab_index: int,
+    timeout_seconds: float,
+    activation_delay_seconds: float,
+    javascript: str,
+) -> list[str]:
+    return [
+        f"with timeout of {timeout_seconds} seconds",
+        'tell application "Google Chrome"',
+        f'if (count of windows) < {window_index} then error "Window index out of range"',
+        f'set targetWindow to window {window_index}',
+        f'if (count of tabs of targetWindow) < {tab_index} then error "Tab index out of range"',
+        "set originalTabIndex to active tab index of targetWindow",
+        "try",
+        f"set active tab index of targetWindow to {tab_index}",
+        f"delay {activation_delay_seconds}",
+        f"set payload to execute active tab of targetWindow javascript {json.dumps(javascript)}",
+        "set active tab index of targetWindow to originalTabIndex",
+        "return payload",
+        "on error errMsg number errNum",
+        "set active tab index of targetWindow to originalTabIndex",
+        "error errMsg number errNum",
+        "end try",
+        "end tell",
+        "end timeout",
+    ]
