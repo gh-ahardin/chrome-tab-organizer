@@ -147,6 +147,7 @@ Environment variables are loaded from `.env`.
 | `CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS` | Delay between live tab activations to reduce Chrome pressure |
 | `CTO_LIVE_SESSION_ACTIVATION_DELAY_SECONDS` | Default per-tab dwell time before reading the active page DOM |
 | `CTO_LIVE_SESSION_PRIORITY_ACTIVATION_DELAY_SECONDS` | Longer dwell time for authenticated or dynamic domains such as LinkedIn or SharePoint |
+| `CTO_LIVE_SESSION_RETRY_ACTIVATION_DELAY_SECONDS` | One-time slower retry delay when a live DOM capture first returns no text or too little text |
 | `CTO_DISCOVERY_ATTEMPTS` | Retry count for per-window Chrome discovery |
 | `CTO_MIN_LIVE_EXTRACT_CHARS` | Minimum live DOM text length before skipping HTTP fallback |
 | `CTO_PRIORITY_LIVE_EXTRACT_CHARS` | Lower live DOM acceptance threshold for authenticated or dynamic domains |

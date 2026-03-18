@@ -135,3 +135,54 @@ def test_priority_live_session_domain_accepts_shorter_authenticated_content(monk
     assert content.extraction_method == "chrome_live_dom"
     assert content.http_fallback_used is False
     assert content.live_session_succeeded is True
+
+
+def test_extract_single_tab_retries_live_session_with_longer_delay(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="tab-retry",
+        stable_key="tab-retry",
+        fingerprint_key="tab-retry",
+        window_index=1,
+        tab_index=1,
+        title="Example retry",
+        url="https://example.com/retry",
+        domain="example.com",
+        discovered_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    settings = Settings(
+        prefer_live_chrome_session=True,
+        min_live_extract_chars=200,
+        live_session_activation_delay_seconds=0.2,
+        live_session_retry_activation_delay_seconds=1.2,
+    )
+
+    attempts: list[float] = []
+
+    def fake_extract_from_live_session(tab, settings, fetched_at, *, activation_delay_seconds):
+        attempts.append(activation_delay_seconds)
+        if activation_delay_seconds < 1:
+            return None, "Live session returned no text."
+        return (
+            ExtractedContent(
+                tab_id=tab.tab_id,
+                final_url=tab.url,
+                status_code=200,
+                content_type="text/html; source=chrome-session",
+                title=tab.title,
+                raw_text="R" * 300,
+                text_char_count=300,
+                extraction_method="chrome_live_dom",
+                fetched_at=fetched_at,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr("chrome_tab_organizer.extraction.extract_from_live_session", fake_extract_from_live_session)
+
+    content = extract_single_tab(tab, settings, live_session_available=True)
+    assert attempts == [0.2, 1.2]
+    assert content.extraction_method == "chrome_live_dom"
+    assert content.live_session_succeeded is True

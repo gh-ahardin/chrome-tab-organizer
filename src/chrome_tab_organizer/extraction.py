@@ -151,6 +151,21 @@ def extract_single_tab(
                     fetched_at,
                     activation_delay_seconds=activation_delay_seconds,
                 )
+                if (
+                    (live_content is None or live_content.text_char_count < live_min_chars)
+                    and settings.live_session_retry_activation_delay_seconds > activation_delay_seconds
+                ):
+                    retry_content, retry_error = extract_from_live_session(
+                        tab,
+                        settings,
+                        fetched_at,
+                        activation_delay_seconds=settings.live_session_retry_activation_delay_seconds,
+                    )
+                    if retry_content and (
+                        live_content is None or retry_content.text_char_count >= live_content.text_char_count
+                    ):
+                        live_content = retry_content
+                        live_error = retry_error
                 if live_content:
                     live_text_char_count = live_content.text_char_count
                     if live_content.text_char_count >= live_min_chars:

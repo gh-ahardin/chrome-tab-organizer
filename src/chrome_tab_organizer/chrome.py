@@ -216,10 +216,45 @@ def capture_live_tab_snapshot(
     javascript = """
 (() => {
   const pick = (value) => typeof value === "string" ? value : "";
+  const collectText = (root) => {
+    if (!root) {
+      return "";
+    }
+    const inner = pick(root.innerText).replace(/\\u0000/g, " ").trim();
+    if (inner) {
+      return inner;
+    }
+    return pick(root.textContent).replace(/\\u0000/g, " ").trim();
+  };
+  const collectFrameTexts = () => {
+    const texts = [];
+    for (const frame of document.querySelectorAll("iframe")) {
+      try {
+        const frameDocument = frame.contentDocument;
+        const frameRoot = frameDocument ? (frameDocument.body || frameDocument.documentElement) : null;
+        const frameText = collectText(frameRoot);
+        if (frameText) {
+          texts.push(frameText);
+        }
+      } catch (_error) {
+        // Cross-origin frames are expected and can be ignored.
+      }
+    }
+    return texts;
+  };
   const meta = document.querySelector('meta[name="description"], meta[property="og:description"]');
-  const article = document.querySelector("article");
-  const root = article || document.body || document.documentElement;
-  const text = pick(root ? root.innerText : "").replace(/\\u0000/g, " ").trim();
+  const candidates = [
+    document.querySelector("article"),
+    document.querySelector("main"),
+    document.querySelector('[role="main"]'),
+    document.body,
+    document.documentElement,
+  ]
+    .map((root) => collectText(root))
+    .filter(Boolean);
+  const frameTexts = collectFrameTexts();
+  const text = [...candidates, ...frameTexts]
+    .sort((left, right) => right.length - left.length)[0] || "";
   return JSON.stringify({
     title: pick(document.title),
     url: pick(location.href),

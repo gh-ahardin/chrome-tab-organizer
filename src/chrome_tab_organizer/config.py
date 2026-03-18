@@ -32,6 +32,7 @@ class Settings(BaseModel):
     live_extract_tab_pause_seconds: float = 0.1
     live_session_activation_delay_seconds: float = 0.2
     live_session_priority_activation_delay_seconds: float = 0.9
+    live_session_retry_activation_delay_seconds: float = 1.2
     discovery_attempts: int = 3
     min_live_extract_chars: int = 200
     priority_live_extract_chars: int = 80
@@ -89,6 +90,7 @@ class Settings(BaseModel):
             "live_extract_tab_pause_seconds": "CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS",
             "live_session_activation_delay_seconds": "CTO_LIVE_SESSION_ACTIVATION_DELAY_SECONDS",
             "live_session_priority_activation_delay_seconds": "CTO_LIVE_SESSION_PRIORITY_ACTIVATION_DELAY_SECONDS",
+            "live_session_retry_activation_delay_seconds": "CTO_LIVE_SESSION_RETRY_ACTIVATION_DELAY_SECONDS",
             "discovery_attempts": "CTO_DISCOVERY_ATTEMPTS",
             "min_live_extract_chars": "CTO_MIN_LIVE_EXTRACT_CHARS",
             "priority_live_extract_chars": "CTO_PRIORITY_LIVE_EXTRACT_CHARS",
