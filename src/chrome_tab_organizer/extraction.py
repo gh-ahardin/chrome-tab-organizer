@@ -225,6 +225,7 @@ def extract_single_tab(
         method = "trafilatura"
         raw_text = (extracted or "").strip()
 
+        soup: BeautifulSoup | None = None
         if not raw_text:
             soup = BeautifulSoup(html, "html.parser")
             title = (soup.title.string if soup.title and soup.title.string else title).strip()
@@ -234,7 +235,8 @@ def extract_single_tab(
             method = "beautifulsoup_paragraphs"
 
         if not raw_text:
-            soup = BeautifulSoup(html, "html.parser")
+            if soup is None:
+                soup = BeautifulSoup(html, "html.parser")
             body_text = soup.get_text(" ", strip=True)
             raw_text = body_text[:4000]
             excerpt = raw_text[:280] if raw_text else None

@@ -8,6 +8,9 @@ from urllib.parse import urlparse, urlunparse
 
 from chrome_tab_organizer.models import ChromeTab
 
+LIVE_SNAPSHOT_TEXT_LIMIT = 50_000
+LIVE_SNAPSHOT_FRAME_LIMIT = 10
+
 WINDOW_COUNT_SCRIPT = r'''
 tell application "Google Chrome"
     return count of windows
@@ -221,20 +224,24 @@ def capture_live_tab_snapshot(
 ) -> dict[str, str | int | None]:
     javascript = """
 (() => {
+  const TEXT_LIMIT = %d;
+  const FRAME_LIMIT = %d;
   const pick = (value) => typeof value === "string" ? value : "";
+  const clip = (value) => value.length > TEXT_LIMIT ? value.slice(0, TEXT_LIMIT) : value;
   const collectText = (root) => {
     if (!root) {
       return "";
     }
-    const inner = pick(root.innerText).replace(/\\u0000/g, " ").trim();
+    const inner = clip(pick(root.innerText).replace(/\\u0000/g, " ").trim());
     if (inner) {
       return inner;
     }
-    return pick(root.textContent).replace(/\\u0000/g, " ").trim();
+    return clip(pick(root.textContent).replace(/\\u0000/g, " ").trim());
   };
   const collectFrameTexts = () => {
     const texts = [];
-    for (const frame of document.querySelectorAll("iframe")) {
+    const frames = Array.from(document.querySelectorAll("iframe")).slice(0, FRAME_LIMIT);
+    for (const frame of frames) {
       try {
         const frameDocument = frame.contentDocument;
         const frameRoot = frameDocument ? (frameDocument.body || frameDocument.documentElement) : null;
@@ -265,11 +272,12 @@ def capture_live_tab_snapshot(
     title: pick(document.title),
     url: pick(location.href),
     excerpt: pick(meta ? meta.content : "").trim().slice(0, 280),
-    text: text.slice(0, 50000),
+    text,
     text_char_count: text.length
   });
 })()
-""".strip()
+""" % (LIVE_SNAPSHOT_TEXT_LIMIT, LIVE_SNAPSHOT_FRAME_LIMIT)
+    javascript = javascript.strip()
     script_lines = build_live_snapshot_script_lines(
         window_index=window_index,
         tab_index=tab_index,

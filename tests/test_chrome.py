@@ -1,10 +1,13 @@
 import subprocess
 
 from chrome_tab_organizer.chrome import (
+    LIVE_SNAPSHOT_FRAME_LIMIT,
+    LIVE_SNAPSHOT_TEXT_LIMIT,
     build_live_snapshot_script_lines,
     classify_live_session_error,
     preflight_chrome_access,
     probe_live_javascript_support,
+    capture_live_tab_snapshot,
     window_tab_listing_script,
 )
 
@@ -78,3 +81,25 @@ def test_live_snapshot_script_does_not_reorder_windows() -> None:
         javascript="document.title",
     )
     assert not any("set index of targetWindow to 1" in line for line in script_lines)
+
+
+def test_capture_live_tab_snapshot_limits_payload_before_return(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+
+        class Result:
+            stdout = '{"title":"Example","url":"https://example.com","text":"hello","text_char_count":5}'
+
+        return Result()
+
+    monkeypatch.setattr("chrome_tab_organizer.chrome.subprocess.run", fake_run)
+
+    snapshot = capture_live_tab_snapshot(window_index=1, tab_index=1)
+    assert snapshot["text"] == "hello"
+
+    command = captured["command"]
+    assert any(f"const TEXT_LIMIT = {LIVE_SNAPSHOT_TEXT_LIMIT};" in part for part in command)
+    assert any(f"const FRAME_LIMIT = {LIVE_SNAPSHOT_FRAME_LIMIT};" in part for part in command)
+    assert any("slice(0, FRAME_LIMIT)" in part for part in command)
