@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 
 from chrome_tab_organizer.config import Settings
-from chrome_tab_organizer.extraction import extract_tabs
-from chrome_tab_organizer.models import ChromeTab
+from chrome_tab_organizer.extraction import extract_single_tab, extract_tabs
+from chrome_tab_organizer.models import ChromeTab, ExtractedContent
 
 
 def _sample_tab() -> ChromeTab:
@@ -90,3 +90,48 @@ def test_extract_tabs_can_fail_fast_when_live_session_required(monkeypatch) -> N
         assert "Chrome blocks JavaScript execution from automation." in str(exc)
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected RuntimeError when live session is required.")
+
+
+def test_priority_live_session_domain_accepts_shorter_authenticated_content(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="linkedin-1",
+        stable_key="linkedin-1",
+        fingerprint_key="linkedin-1",
+        window_index=1,
+        tab_index=1,
+        title="LinkedIn post",
+        url="https://www.linkedin.com/posts/example",
+        domain="www.linkedin.com",
+        discovered_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    settings = Settings(
+        prefer_live_chrome_session=True,
+        min_live_extract_chars=200,
+        priority_live_extract_chars=80,
+    )
+
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction.extract_from_live_session",
+        lambda *args, **kwargs: (
+            ExtractedContent(
+                tab_id=tab.tab_id,
+                final_url=tab.url,
+                status_code=200,
+                content_type="text/html; source=chrome-session",
+                title=tab.title,
+                raw_text="L" * 120,
+                text_char_count=120,
+                extraction_method="chrome_live_dom",
+                fetched_at=now,
+            ),
+            None,
+        ),
+    )
+
+    content = extract_single_tab(tab, settings, live_session_available=True)
+    assert content.extraction_method == "chrome_live_dom"
+    assert content.http_fallback_used is False
+    assert content.live_session_succeeded is True

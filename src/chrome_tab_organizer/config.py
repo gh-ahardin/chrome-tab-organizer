@@ -23,14 +23,18 @@ class Settings(BaseModel):
     max_tabs: int | None = None
     fetch_timeout_seconds: float = 20.0
     max_concurrency: int = 8
+    llm_max_concurrency: int = 4
     llm_max_input_chars: int = 12000
     prefer_live_chrome_session: bool = True
     require_live_chrome_session: bool = False
     session_extract_timeout_seconds: float = 8.0
     session_extract_attempts: int = 3
-    live_extract_tab_pause_seconds: float = 0.35
+    live_extract_tab_pause_seconds: float = 0.1
+    live_session_activation_delay_seconds: float = 0.2
+    live_session_priority_activation_delay_seconds: float = 0.9
     discovery_attempts: int = 3
     min_live_extract_chars: int = 200
+    priority_live_extract_chars: int = 80
     live_session_skip_domains: list[str] = Field(
         default_factory=lambda: [
             "youtube.com",
@@ -38,6 +42,17 @@ class Settings(BaseModel):
             "m.youtube.com",
             "music.youtube.com",
             "youtu.be",
+        ]
+    )
+    live_session_priority_domains: list[str] = Field(
+        default_factory=lambda: [
+            "linkedin.com",
+            "www.linkedin.com",
+            "reddit.com",
+            "www.reddit.com",
+            "sharepoint.com",
+            "docs.google.com",
+            "drive.google.com",
         ]
     )
     include_domains: list[str] = Field(default_factory=list)
@@ -65,15 +80,20 @@ class Settings(BaseModel):
             "max_tabs": "CTO_MAX_TABS",
             "fetch_timeout_seconds": "CTO_FETCH_TIMEOUT_SECONDS",
             "max_concurrency": "CTO_MAX_CONCURRENCY",
+            "llm_max_concurrency": "CTO_LLM_MAX_CONCURRENCY",
             "llm_max_input_chars": "CTO_LLM_MAX_INPUT_CHARS",
             "prefer_live_chrome_session": "CTO_PREFER_LIVE_CHROME_SESSION",
             "require_live_chrome_session": "CTO_REQUIRE_LIVE_CHROME_SESSION",
             "session_extract_timeout_seconds": "CTO_SESSION_EXTRACT_TIMEOUT_SECONDS",
             "session_extract_attempts": "CTO_SESSION_EXTRACT_ATTEMPTS",
             "live_extract_tab_pause_seconds": "CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS",
+            "live_session_activation_delay_seconds": "CTO_LIVE_SESSION_ACTIVATION_DELAY_SECONDS",
+            "live_session_priority_activation_delay_seconds": "CTO_LIVE_SESSION_PRIORITY_ACTIVATION_DELAY_SECONDS",
             "discovery_attempts": "CTO_DISCOVERY_ATTEMPTS",
             "min_live_extract_chars": "CTO_MIN_LIVE_EXTRACT_CHARS",
+            "priority_live_extract_chars": "CTO_PRIORITY_LIVE_EXTRACT_CHARS",
             "live_session_skip_domains": "CTO_LIVE_SESSION_SKIP_DOMAINS",
+            "live_session_priority_domains": "CTO_LIVE_SESSION_PRIORITY_DOMAINS",
             "include_domains": "CTO_INCLUDE_DOMAINS",
             "exclude_domains": "CTO_EXCLUDE_DOMAINS",
         }
@@ -95,7 +115,13 @@ class Settings(BaseModel):
             raise ValueError(f"provider must be one of {sorted(allowed)}")
         return normalized
 
-    @field_validator("include_domains", "exclude_domains", "live_session_skip_domains", mode="before")
+    @field_validator(
+        "include_domains",
+        "exclude_domains",
+        "live_session_skip_domains",
+        "live_session_priority_domains",
+        mode="before",
+    )
     @classmethod
     def split_csv(cls, value: str | list[str] | None) -> list[str]:
         if value is None:

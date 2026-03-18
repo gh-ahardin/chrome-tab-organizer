@@ -211,6 +211,7 @@ def capture_live_tab_snapshot(
     tab_index: int,
     timeout_seconds: float = 8.0,
     attempts: int = 3,
+    activation_delay_seconds: float = 0.15,
 ) -> dict[str, str | int | None]:
     javascript = """
 (() => {
@@ -238,7 +239,7 @@ def capture_live_tab_snapshot(
         "try",
         "set index of targetWindow to 1",
         f"set active tab index of targetWindow to {tab_index}",
-        "delay 0.15",
+        f"delay {activation_delay_seconds}",
         f"set payload to execute active tab of targetWindow javascript {json.dumps(javascript)}",
         "set active tab index of targetWindow to originalTabIndex",
         "return payload",

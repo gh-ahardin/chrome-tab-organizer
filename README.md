@@ -138,15 +138,20 @@ Environment variables are loaded from `.env`.
 | `CTO_MAX_TABS` | Optional cap for tabs processed |
 | `CTO_FETCH_TIMEOUT_SECONDS` | HTTP fetch timeout |
 | `CTO_MAX_CONCURRENCY` | Concurrent extraction workers |
+| `CTO_LLM_MAX_CONCURRENCY` | Concurrent summarization workers for LLM calls |
 | `CTO_LLM_MAX_INPUT_CHARS` | Max extracted text characters sent to LLM |
 | `CTO_PREFER_LIVE_CHROME_SESSION` | Read content from active Chrome session before HTTP fetch |
 | `CTO_REQUIRE_LIVE_CHROME_SESSION` | Fail fast if Chrome session DOM extraction is unavailable instead of silently falling back to HTTP |
 | `CTO_SESSION_EXTRACT_TIMEOUT_SECONDS` | AppleScript timeout for live session extraction |
 | `CTO_SESSION_EXTRACT_ATTEMPTS` | Retry count for live DOM extraction |
 | `CTO_LIVE_EXTRACT_TAB_PAUSE_SECONDS` | Delay between live tab activations to reduce Chrome pressure |
+| `CTO_LIVE_SESSION_ACTIVATION_DELAY_SECONDS` | Default per-tab dwell time before reading the active page DOM |
+| `CTO_LIVE_SESSION_PRIORITY_ACTIVATION_DELAY_SECONDS` | Longer dwell time for authenticated or dynamic domains such as LinkedIn or SharePoint |
 | `CTO_DISCOVERY_ATTEMPTS` | Retry count for per-window Chrome discovery |
 | `CTO_MIN_LIVE_EXTRACT_CHARS` | Minimum live DOM text length before skipping HTTP fallback |
+| `CTO_PRIORITY_LIVE_EXTRACT_CHARS` | Lower live DOM acceptance threshold for authenticated or dynamic domains |
 | `CTO_LIVE_SESSION_SKIP_DOMAINS` | Comma-separated domains to avoid activating in live Chrome session, such as YouTube |
+| `CTO_LIVE_SESSION_PRIORITY_DOMAINS` | Domains that should get a longer activation delay and lower live-session threshold |
 | `CTO_INCLUDE_DOMAINS` | Optional comma-separated allowlist |
 | `CTO_EXCLUDE_DOMAINS` | Optional comma-separated blocklist |
 
@@ -170,6 +175,19 @@ CTO_REQUIRE_LIVE_CHROME_SESSION=true chrome-tab-organizer run --window-index 1 -
 ```
 
 That will stop immediately if Chrome blocks JavaScript from automation, instead of completing with HTTP fallback only.
+
+To improve reliability on authenticated or dynamic sites while keeping runtime reasonable, the current defaults do two things:
+
+- run Bedrock summarization with bounded concurrency (`CTO_LLM_MAX_CONCURRENCY=4`)
+- treat domains such as LinkedIn, Reddit, SharePoint, and Google Docs as live-session priority domains with a longer activation delay and a lower live-text acceptance threshold
+
+If you want a more conservative live-session pass for logged-in tabs, use:
+
+```bash
+CTO_REQUIRE_LIVE_CHROME_SESSION=true \
+CTO_LIVE_SESSION_PRIORITY_ACTIVATION_DELAY_SECONDS=1.2 \
+chrome-tab-organizer run --window-index 1 --sample-tabs 25
+```
 
 ## Bedrock Claude
 

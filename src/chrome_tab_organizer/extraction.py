@@ -32,7 +32,32 @@ def _domain_allowed(domain: str, settings: Settings) -> bool:
 
 
 def _skip_live_session_for_domain(domain: str, settings: Settings) -> bool:
-    return domain.lower() in settings.live_session_skip_domains
+    return _domain_matches(domain, settings.live_session_skip_domains)
+
+
+def _domain_matches(domain: str, candidates: list[str]) -> bool:
+    normalized = domain.lower()
+    for candidate in candidates:
+        candidate_normalized = candidate.lower()
+        if normalized == candidate_normalized or normalized.endswith(f".{candidate_normalized}"):
+            return True
+    return False
+
+
+def _priority_live_session_domain(domain: str, settings: Settings) -> bool:
+    return _domain_matches(domain, settings.live_session_priority_domains)
+
+
+def _live_session_activation_delay(domain: str, settings: Settings) -> float:
+    if _priority_live_session_domain(domain, settings):
+        return settings.live_session_priority_activation_delay_seconds
+    return settings.live_session_activation_delay_seconds
+
+
+def _live_session_min_chars(domain: str, settings: Settings) -> int:
+    if _priority_live_session_domain(domain, settings):
+        return settings.priority_live_extract_chars
+    return settings.min_live_extract_chars
 
 
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
@@ -106,6 +131,8 @@ def extract_single_tab(
         live_error: str | None = None
         live_text_char_count = 0
         live_rejected_as_too_short = False
+        live_min_chars = _live_session_min_chars(tab.domain, settings)
+        activation_delay_seconds = _live_session_activation_delay(tab.domain, settings)
 
         if settings.prefer_live_chrome_session:
             if not live_session_available:
@@ -118,10 +145,15 @@ def extract_single_tab(
                 logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)
             else:
                 live_attempted = True
-                live_content, live_error = extract_from_live_session(tab, settings, fetched_at)
+                live_content, live_error = extract_from_live_session(
+                    tab,
+                    settings,
+                    fetched_at,
+                    activation_delay_seconds=activation_delay_seconds,
+                )
                 if live_content:
                     live_text_char_count = live_content.text_char_count
-                    if live_content.text_char_count >= settings.min_live_extract_chars:
+                    if live_content.text_char_count >= live_min_chars:
                         logger.info(
                             "Live session extraction succeeded for %s (%s chars)",
                             tab.tab_id,
@@ -227,9 +259,11 @@ def extract_from_live_session(
     tab: ChromeTab,
     settings: Settings,
     fetched_at: datetime,
+    *,
+    activation_delay_seconds: float,
 ) -> tuple[ExtractedContent | None, str | None]:
     try:
-        snapshot = _capture_live_tab_snapshot_with_retry(tab, settings)
+        snapshot = _capture_live_tab_snapshot_with_retry(tab, settings, activation_delay_seconds)
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
 
@@ -267,10 +301,12 @@ def extract_from_live_session(
 def _capture_live_tab_snapshot_with_retry(
     tab: ChromeTab,
     settings: Settings,
+    activation_delay_seconds: float,
 ) -> dict[str, str | int | None]:
     return capture_live_tab_snapshot(
         window_index=tab.window_index,
         tab_index=tab.tab_index,
         timeout_seconds=settings.session_extract_timeout_seconds,
         attempts=settings.session_extract_attempts,
+        activation_delay_seconds=activation_delay_seconds,
     )

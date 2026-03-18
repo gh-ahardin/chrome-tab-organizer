@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Iterable
@@ -43,23 +44,38 @@ def enrich_tabs(
     settings: Settings,
 ) -> list[TabEnrichment]:
     client = build_llm_client(settings)
-    enrichments: list[TabEnrichment] = []
-    for tab, content in tab_content_pairs:
+    if settings.llm_max_concurrency <= 1 or len(tab_content_pairs) <= 1:
+        return [_enrich_single_tab(tab, content, client, settings) for tab, content in tab_content_pairs]
+
+    enrichments_by_index: dict[int, TabEnrichment] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=settings.llm_max_concurrency) as executor:
+        futures = {
+            executor.submit(_enrich_single_tab, tab, content, client, settings): index
+            for index, (tab, content) in enumerate(tab_content_pairs)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            enrichments_by_index[futures[future]] = future.result()
+    return [enrichments_by_index[index] for index in range(len(tab_content_pairs))]
+
+
+def _enrich_single_tab(
+    tab: ChromeTab,
+    content: ExtractedContent,
+    client,
+    settings: Settings,
+) -> TabEnrichment:
         prompt = build_summary_prompt(tab, content, settings)
         summary = client.summarize_page(prompt)
         topic = choose_topic(summary)
-        enrichments.append(
-            TabEnrichment(
-                tab_id=tab.tab_id,
-                topic=topic[:120],
-                topic_reason=summary.why_it_matters[:400],
-                summary=summary,
-                summarized_at=datetime.now(UTC),
-                provider=client.provider_name,
-                model=client.model_name,
-            )
+        return TabEnrichment(
+            tab_id=tab.tab_id,
+            topic=topic[:120],
+            topic_reason=summary.why_it_matters[:400],
+            summary=summary,
+            summarized_at=datetime.now(UTC),
+            provider=client.provider_name,
+            model=client.model_name,
         )
-    return enrichments
 
 
 def build_summary_prompt(tab: ChromeTab, content: ExtractedContent, settings: Settings) -> str:
