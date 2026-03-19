@@ -114,7 +114,7 @@ def test_run_summary_counts_duplicates_and_failures(tmp_path) -> None:
     assert summary.live_session_succeeded_tabs == 1
     assert summary.live_session_failed_tabs == 1
     assert summary.live_dom_extractions == 1
-    assert summary.medical_priority_tabs == 1
+    assert summary.user_priority_tabs == 1
 
 
 def test_content_duplicate_key_merges_identical_extracted_pages(tmp_path) -> None:

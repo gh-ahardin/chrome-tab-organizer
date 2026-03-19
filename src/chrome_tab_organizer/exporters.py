@@ -8,6 +8,12 @@ from xml.sax.saxutils import escape
 
 from chrome_tab_organizer.models import PipelineTabRecord, RankedPage, ReportBundle, RunSummary, TopicGroup
 
+_MEDICAL_PRIORITY_DISCLAIMER = (
+    "This report is a reading and triage aid, not medical advice. "
+    "Clinical-trial and oncology pages should be verified against the original source "
+    "and discussed with a qualified clinician."
+)
+
 
 def export_markdown_report(
     output_dir: Path,
@@ -15,6 +21,7 @@ def export_markdown_report(
     topics: list[TopicGroup],
     top_pages: list[RankedPage],
     run_summary: RunSummary,
+    priority_label: str = "medical",
 ) -> Path:
     report_path = output_dir / "report.md"
     generated_at = datetime.now(UTC).isoformat()
@@ -25,9 +32,12 @@ def export_markdown_report(
         f"Total unique tabs in report: `{len(records)}`",
         f"Topics: `{len(topics)}`",
         "",
-        "## Medical Safety Note",
+        f"## {priority_label.capitalize()} Priority Note",
         "",
-        "This report is a reading and triage aid, not medical advice. Clinical-trial and oncology pages should be verified against the original source and discussed with a qualified clinician.",
+        _MEDICAL_PRIORITY_DISCLAIMER if priority_label == "medical" else (
+            f"Pages flagged as {priority_label} priority have been ranked higher in this report. "
+            "Verify important content against the original source."
+        ),
         "",
         "## Operator Summary",
         "",
@@ -44,7 +54,7 @@ def export_markdown_report(
         f"- Live session failed: {run_summary.live_session_failed_tabs}",
         f"- Live DOM extractions: {run_summary.live_dom_extractions}",
         f"- HTTP fallback extractions: {run_summary.http_fallback_extractions}",
-        f"- Medical-priority tabs: {run_summary.medical_priority_tabs}",
+        f"- {priority_label.capitalize()}-priority tabs: {run_summary.user_priority_tabs}",
         "",
         "## Top 10 Pages To Read Next",
         "",

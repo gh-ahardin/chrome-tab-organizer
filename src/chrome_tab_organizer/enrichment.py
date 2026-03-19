@@ -15,28 +15,6 @@ from chrome_tab_organizer.models import (
     TopicGroup,
 )
 
-MEDICAL_KEYWORDS = {
-    "triple negative",
-    "breast cancer",
-    "tnbc",
-    "clinical trial",
-    "oncology",
-    "metastatic",
-    "histopathology",
-    "tumor",
-    "drug target",
-    "biomarker",
-}
-
-MEDICAL_DOMAINS = {
-    "clinicaltrials.gov",
-    "cancer.gov",
-    "pubmed.ncbi.nlm.nih.gov",
-    "asco.org",
-    "nature.com",
-    "nejm.org",
-    "thelancet.com",
-}
 
 
 def enrich_tabs(
@@ -125,12 +103,13 @@ def build_topic_groups(
 def rank_pages(
     tabs: list[ChromeTab],
     enrichments: list[TabEnrichment],
+    settings: Settings,
     limit: int = 10,
 ) -> list[RankedPage]:
     tab_by_id = {tab.tab_id: tab for tab in tabs}
     ordered = sorted(
         enrichments,
-        key=lambda item: page_priority_score(tab_by_id[item.tab_id], item),
+        key=lambda item: page_priority_score(tab_by_id[item.tab_id], item, settings),
         reverse=True,
     )[:limit]
     ranked: list[RankedPage] = []
@@ -150,15 +129,17 @@ def rank_pages(
     return ranked
 
 
-def page_priority_score(tab: ChromeTab, enrichment: TabEnrichment) -> tuple[int, int, int, int, int]:
-    medical_bonus = 0
+def page_priority_score(
+    tab: ChromeTab, enrichment: TabEnrichment, settings: Settings
+) -> tuple[int, int, int, int, int]:
+    bonus = 0
     lowered = f"{tab.title} {tab.url} {enrichment.summary.summary} {enrichment.summary.category}".lower()
-    if any(keyword in lowered for keyword in MEDICAL_KEYWORDS):
-        medical_bonus += 20
-    if tab.domain.lower() in MEDICAL_DOMAINS:
-        medical_bonus += 15
+    if any(kw in lowered for kw in settings.priority_keywords):
+        bonus += settings.priority_keyword_score_bonus
+    if tab.domain.lower() in {d.lower() for d in settings.priority_domains}:
+        bonus += settings.priority_domain_score_bonus
     return (
-        enrichment.summary.importance_score + medical_bonus,
+        enrichment.summary.importance_score + bonus,
         enrichment.summary.clinical_relevance,
         enrichment.summary.urgency,
         enrichment.summary.novelty,
@@ -166,8 +147,11 @@ def page_priority_score(tab: ChromeTab, enrichment: TabEnrichment) -> tuple[int,
     )
 
 
-def is_medical_priority(tab: ChromeTab, enrichment: TabEnrichment | None) -> bool:
+def is_user_priority(tab: ChromeTab, enrichment: TabEnrichment | None, settings: Settings) -> bool:
     if enrichment is None:
         return False
     lowered = f"{tab.title} {tab.url} {enrichment.summary.summary} {enrichment.topic}".lower()
-    return any(keyword in lowered for keyword in MEDICAL_KEYWORDS) or tab.domain.lower() in MEDICAL_DOMAINS
+    return (
+        any(kw in lowered for kw in settings.priority_keywords)
+        or tab.domain.lower() in {d.lower() for d in settings.priority_domains}
+    )

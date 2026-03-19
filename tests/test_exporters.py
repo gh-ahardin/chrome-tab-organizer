@@ -96,7 +96,7 @@ def test_exporters_write_files(tmp_path: Path) -> None:
         live_session_failed_tabs=0,
         live_dom_extractions=1,
         http_fallback_extractions=0,
-        medical_priority_tabs=0,
+        user_priority_tabs=0,
         topic_count=1,
     )
     report = export_markdown_report(tmp_path, [record], topics, top_pages, run_summary)
@@ -106,7 +106,7 @@ def test_exporters_write_files(tmp_path: Path) -> None:
     assert bookmarks.exists()
     assert summary.exists()
     assert "Top 10 Pages To Read Next" in report.read_text(encoding="utf-8")
-    assert "Medical Safety Note" in report.read_text(encoding="utf-8")
+    assert "Medical Priority Note" in report.read_text(encoding="utf-8")
     assert "Bookmarks" in bookmarks.read_text(encoding="utf-8")
 
 

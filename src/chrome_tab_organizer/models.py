@@ -126,7 +126,7 @@ class RunSummary(BaseModel):
     live_session_failed_tabs: int
     live_dom_extractions: int
     http_fallback_extractions: int
-    medical_priority_tabs: int
+    user_priority_tabs: int
     topic_count: int
     top_failure_domains: list[FailureDomainStat] = Field(default_factory=list)
 

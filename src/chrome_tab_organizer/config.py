@@ -58,6 +58,22 @@ class Settings(BaseModel):
     )
     include_domains: list[str] = Field(default_factory=list)
     exclude_domains: list[str] = Field(default_factory=list)
+    priority_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "triple negative", "breast cancer", "tnbc", "clinical trial",
+            "oncology", "metastatic", "histopathology", "tumor",
+            "drug target", "biomarker",
+        ]
+    )
+    priority_domains: list[str] = Field(
+        default_factory=lambda: [
+            "clinicaltrials.gov", "cancer.gov", "pubmed.ncbi.nlm.nih.gov",
+            "asco.org", "nature.com", "nejm.org", "thelancet.com",
+        ]
+    )
+    priority_keyword_score_bonus: int = 20
+    priority_domain_score_bonus: int = 15
+    priority_label: str = "medical"
 
     @classmethod
     def load(cls, env_path: Path = Path(".env")) -> "Settings":
@@ -98,6 +114,11 @@ class Settings(BaseModel):
             "live_session_priority_domains": "CTO_LIVE_SESSION_PRIORITY_DOMAINS",
             "include_domains": "CTO_INCLUDE_DOMAINS",
             "exclude_domains": "CTO_EXCLUDE_DOMAINS",
+            "priority_keywords": "CTO_PRIORITY_KEYWORDS",
+            "priority_domains": "CTO_PRIORITY_DOMAINS",
+            "priority_keyword_score_bonus": "CTO_PRIORITY_KEYWORD_SCORE_BONUS",
+            "priority_domain_score_bonus": "CTO_PRIORITY_DOMAIN_SCORE_BONUS",
+            "priority_label": "CTO_PRIORITY_LABEL",
         }
         for field_name, env_name in mapping.items():
             raw = merged.get(env_name)
@@ -122,6 +143,8 @@ class Settings(BaseModel):
         "exclude_domains",
         "live_session_skip_domains",
         "live_session_priority_domains",
+        "priority_keywords",
+        "priority_domains",
         mode="before",
     )
     @classmethod

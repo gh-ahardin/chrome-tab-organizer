@@ -9,7 +9,7 @@ import hashlib
 from chrome_tab_organizer.cache import SQLiteCache
 from chrome_tab_organizer.chrome import discover_window_tabs, get_chrome_window_count, preflight_chrome_access
 from chrome_tab_organizer.config import Settings
-from chrome_tab_organizer.enrichment import build_topic_groups, enrich_tabs, is_medical_priority, rank_pages
+from chrome_tab_organizer.enrichment import build_topic_groups, enrich_tabs, is_user_priority, rank_pages
 from chrome_tab_organizer.exporters import (
     export_bookmark_html,
     export_json_snapshot,
@@ -157,6 +157,7 @@ class OrganizerPipeline:
             top_pages = rank_pages(
                 tabs=[record.tab for record in complete_records],
                 enrichments=[record.enrichment for record in complete_records if record.enrichment],
+                settings=self.settings,
                 limit=10,
             )
             run_summary = self.build_run_summary(records)
@@ -167,6 +168,7 @@ class OrganizerPipeline:
                     topics,
                     top_pages,
                     run_summary,
+                    priority_label=self.settings.priority_label,
                 ),
                 "bookmarks": export_bookmark_html(self.settings.output_dir, complete_records),
                 "json": export_json_snapshot(self.settings.output_dir, records),
@@ -247,7 +249,7 @@ class OrganizerPipeline:
             if record.content and record.content.extraction_method != "chrome_live_dom"
         )
         medical_priority = sum(
-            1 for record in summarized_records if is_medical_priority(record.tab, record.enrichment)
+            1 for record in summarized_records if is_user_priority(record.tab, record.enrichment, self.settings)
         )
         topics = build_topic_groups(
             record.enrichment for record in summarized_records if record.enrichment is not None
@@ -267,7 +269,7 @@ class OrganizerPipeline:
             live_session_failed_tabs=live_failed,
             live_dom_extractions=live_dom,
             http_fallback_extractions=http_fallback,
-            medical_priority_tabs=medical_priority,
+            user_priority_tabs=medical_priority,
             topic_count=len(topics),
             top_failure_domains=[
                 FailureDomainStat(domain=domain, count=count)
