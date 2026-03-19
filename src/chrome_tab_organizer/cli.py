@@ -88,6 +88,22 @@ def discover_tabs(
     _echo_discovered_tabs(tabs)
 
 
+@app.command("classify")
+def classify(
+    window_index: int | None = typer.Option(None, "--window-index", min=1),
+    sample_tabs: int | None = typer.Option(None, "--sample-tabs", min=1),
+) -> None:
+    """Batch-classify discovered tabs by title, URL, and domain."""
+    settings = Settings.load()
+    pipeline = OrganizerPipeline(settings)
+    try:
+        count = pipeline.classify(window_index=window_index, sample_tabs=sample_tabs)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Classified {count} tabs.")
+
+
 @app.command("summarize")
 def summarize(
     window_index: int | None = typer.Option(None, "--window-index", min=1),

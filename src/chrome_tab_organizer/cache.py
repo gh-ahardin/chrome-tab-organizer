@@ -15,6 +15,7 @@ from chrome_tab_organizer.models import (
     PipelineStage,
     StageRun,
     StageStatus,
+    TabClassification,
     TabEnrichment,
     TabStatus,
 )
@@ -72,6 +73,13 @@ class SQLiteCache:
                 );
 
                 CREATE TABLE IF NOT EXISTS enrichments (
+                    tab_id TEXT PRIMARY KEY,
+                    payload_json BLOB NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(tab_id) REFERENCES tabs(tab_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS classifications (
                     tab_id TEXT PRIMARY KEY,
                     payload_json BLOB NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -203,6 +211,109 @@ class SQLiteCache:
             )
         self.mark_status(enrichment.tab_id, TabStatus.grouped)
 
+    def save_classifications(self, classifications: list[TabClassification]) -> None:
+        if not classifications:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO classifications (tab_id, payload_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(tab_id) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    updated_at=excluded.updated_at
+                """,
+                [
+                    (c.tab_id, json.dumps(c.model_dump(mode="json")), _utc_now())
+                    for c in classifications
+                ],
+            )
+        for c in classifications:
+            self.mark_status(c.tab_id, TabStatus.classified)
+
+    def get_tabs_needing_classification(self, window_index: int | None = None) -> list[ChromeTab]:
+        with self.connect() as conn:
+            query = """
+                SELECT tab_id, stable_key, fingerprint_key, window_index, tab_index,
+                       title, url, domain, discovered_at, first_seen_at, last_seen_at,
+                       duplicate_of_tab_id
+                FROM tabs
+                WHERE tab_id NOT IN (SELECT tab_id FROM classifications)
+                  AND duplicate_of_tab_id IS NULL
+            """
+            params: tuple[object, ...] = ()
+            if window_index is not None:
+                query += " AND window_index = ?"
+                params = (window_index,)
+            query += " ORDER BY window_index, tab_index"
+            rows = conn.execute(query, params).fetchall()
+        return [
+            ChromeTab(
+                tab_id=row["tab_id"],
+                stable_key=row["stable_key"],
+                fingerprint_key=row["fingerprint_key"],
+                window_index=row["window_index"],
+                tab_index=row["tab_index"],
+                title=row["title"],
+                url=row["url"],
+                domain=row["domain"],
+                discovered_at=datetime.fromisoformat(row["discovered_at"]),
+                first_seen_at=(
+                    datetime.fromisoformat(row["first_seen_at"]) if row["first_seen_at"] else None
+                ),
+                last_seen_at=(
+                    datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
+                ),
+                duplicate_of_tab_id=row["duplicate_of_tab_id"],
+            )
+            for row in rows
+        ]
+
+    def get_tabs_needing_extraction(self, window_index: int | None = None) -> list[ChromeTab]:
+        """Return tabs that have been classified as high-importance or needing detail,
+        but have not yet been extracted."""
+        with self.connect() as conn:
+            query = """
+                SELECT t.tab_id, t.stable_key, t.fingerprint_key, t.window_index, t.tab_index,
+                       t.title, t.url, t.domain, t.discovered_at, t.first_seen_at, t.last_seen_at,
+                       t.duplicate_of_tab_id
+                FROM tabs t
+                JOIN classifications c ON c.tab_id = t.tab_id
+                WHERE t.tab_id NOT IN (SELECT tab_id FROM extracted_content)
+                  AND t.duplicate_of_tab_id IS NULL
+                  AND (
+                      json_extract(c.payload_json, '$.importance') = 'high'
+                      OR json_extract(c.payload_json, '$.needs_detailed_summary') = 1
+                  )
+            """
+            params: tuple[object, ...] = ()
+            if window_index is not None:
+                query += " AND t.window_index = ?"
+                params = (window_index,)
+            query += " ORDER BY t.window_index, t.tab_index"
+            rows = conn.execute(query, params).fetchall()
+        return [
+            ChromeTab(
+                tab_id=row["tab_id"],
+                stable_key=row["stable_key"],
+                fingerprint_key=row["fingerprint_key"],
+                window_index=row["window_index"],
+                tab_index=row["tab_index"],
+                title=row["title"],
+                url=row["url"],
+                domain=row["domain"],
+                discovered_at=datetime.fromisoformat(row["discovered_at"]),
+                first_seen_at=(
+                    datetime.fromisoformat(row["first_seen_at"]) if row["first_seen_at"] else None
+                ),
+                last_seen_at=(
+                    datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else None
+                ),
+                duplicate_of_tab_id=row["duplicate_of_tab_id"],
+            )
+            for row in rows
+        ]
+
     def get_tab_records(self) -> list[PipelineTabRecord]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -221,9 +332,11 @@ class SQLiteCache:
                     t.last_seen_at,
                     t.duplicate_of_tab_id,
                     t.status,
+                    cl.payload_json AS classification_json,
                     ec.payload_json AS content_json,
                     e.payload_json AS enrichment_json
                 FROM tabs t
+                LEFT JOIN classifications cl ON cl.tab_id = t.tab_id
                 LEFT JOIN extracted_content ec ON ec.tab_id = t.tab_id
                 LEFT JOIN enrichments e ON e.tab_id = t.tab_id
                 ORDER BY t.window_index, t.tab_index
@@ -250,6 +363,11 @@ class SQLiteCache:
                 ),
                 duplicate_of_tab_id=row["duplicate_of_tab_id"],
             )
+            classification = (
+                TabClassification.model_validate(json.loads(row["classification_json"]))
+                if row["classification_json"]
+                else None
+            )
             content = (
                 ExtractedContent.model_validate(json.loads(row["content_json"]))
                 if row["content_json"]
@@ -263,6 +381,7 @@ class SQLiteCache:
             records.append(
                 PipelineTabRecord(
                     tab=tab,
+                    classification=classification,
                     content=content,
                     enrichment=enrichment,
                     status=TabStatus(row["status"]),

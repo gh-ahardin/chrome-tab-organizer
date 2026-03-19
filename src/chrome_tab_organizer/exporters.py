@@ -81,7 +81,12 @@ def export_markdown_report(
         lines.append("")
         for tab_id in topic.tab_ids:
             record = records_by_tab_id[tab_id]
-            summary = record.enrichment.summary.summary if record.enrichment else "No summary available."
+            if record.enrichment:
+                summary = record.enrichment.summary.summary
+            elif record.classification:
+                summary = record.classification.reason
+            else:
+                summary = "No summary available."
             lines.append(f"- [{record.tab.title}]({record.tab.url})")
             lines.append(f"  - {summary}")
         lines.append("")
@@ -93,7 +98,12 @@ def export_bookmark_html(output_dir: Path, records: list[PipelineTabRecord]) -> 
     bookmark_path = output_dir / "bookmarks_by_topic.html"
     grouped: dict[str, list[PipelineTabRecord]] = defaultdict(list)
     for record in records:
-        topic = record.enrichment.topic if record.enrichment else "Uncategorized"
+        if record.enrichment:
+            topic = record.enrichment.topic
+        elif record.classification:
+            topic = record.classification.topic.title()
+        else:
+            topic = "Uncategorized"
         grouped[topic].append(record)
 
     lines = [

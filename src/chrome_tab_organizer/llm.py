@@ -48,9 +48,17 @@ class LLMClient(ABC):
     def summarize_page(self, prompt: str) -> PageSummary:
         raise NotImplementedError
 
+    @abstractmethod
+    def classify_tabs_batch(self, prompt: str) -> list[dict]:
+        """Classify a batch of tabs from title+URL+domain. Returns list of raw dicts."""
+        raise NotImplementedError
+
 
 class NoopLLMClient(LLMClient):
     def summarize_page(self, prompt: str) -> PageSummary:
+        raise RuntimeError("No LLM provider configured.")
+
+    def classify_tabs_batch(self, prompt: str) -> list[dict]:
         raise RuntimeError("No LLM provider configured.")
 
 
@@ -62,6 +70,52 @@ class HeuristicLLMClient(LLMClient):
     @property
     def model_name(self) -> str:
         return "heuristic"
+
+    def classify_tabs_batch(self, prompt: str) -> list[dict]:
+        """Classify tabs offline using domain mapping and priority keyword matching."""
+        results: list[dict] = []
+        for line in prompt.splitlines():
+            line = line.strip()
+            if not line or not line[0].isdigit():
+                continue
+            # Parse: "N. [tab_id] Title: "..." | URL: ... | Domain: ..."
+            try:
+                rest = line.split(". ", 1)[1] if ". " in line else line
+                tab_id = rest.split("]")[0].lstrip("[")
+                title = ""
+                domain = ""
+                url = ""
+                for part in rest.split(" | "):
+                    part = part.strip()
+                    if part.startswith("Title:"):
+                        title = part.removeprefix("Title:").strip().strip('"')
+                    elif part.startswith("Domain:"):
+                        domain = part.removeprefix("Domain:").strip()
+                    elif part.startswith("URL:"):
+                        url = part.removeprefix("URL:").strip()
+            except Exception:  # noqa: BLE001
+                continue
+
+            combined = f"{title} {url} {domain}"
+            category = _infer_category(combined, domain=domain)
+
+            # Determine importance from priority keywords/domains in settings
+            lowered = combined.lower()
+            is_priority = (
+                any(kw in lowered for kw in self.settings.priority_keywords)
+                or domain.lower().rstrip("/") in {d.lower() for d in self.settings.priority_domains}
+            )
+            importance = "high" if is_priority else ("medium" if category != "general reference" else "low")
+            needs_detail = is_priority
+
+            results.append({
+                "tab_id": tab_id,
+                "topic": category,
+                "importance": importance,
+                "reason": f"Classified as {category} based on domain and title.",
+                "needs_detailed_summary": needs_detail,
+            })
+        return results
 
     def summarize_page(self, prompt: str) -> PageSummary:
         lines = [line.strip() for line in prompt.splitlines() if line.strip()]
@@ -93,6 +147,34 @@ class OpenAICompatibleClient(LLMClient):
         retry=retry_if_exception_type((httpx.HTTPError, ValidationError, json.JSONDecodeError)),
         reraise=True,
     )
+    def classify_tabs_batch(self, prompt: str) -> list[dict]:
+        if not self.settings.base_url:
+            raise ValueError("CTO_BASE_URL is required for openai_compatible provider.")
+        url = self.settings.base_url.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": self.settings.model,
+            "temperature": 0.1,
+            "messages": [
+                {"role": "system", "content": _classification_system_prompt(self.settings)},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+        headers = {"Authorization": f"Bearer {self.settings.api_key}"}
+        with httpx.Client(timeout=60) as client:
+            response = client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+        body = response.json()
+        content = body["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+        return _extract_classification_list(parsed)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type((httpx.HTTPError, ValidationError, json.JSONDecodeError)),
+        reraise=True,
+    )
     def summarize_page(self, prompt: str) -> PageSummary:
         if not self.settings.base_url:
             raise ValueError("CTO_BASE_URL is required for openai_compatible provider.")
@@ -117,6 +199,33 @@ class OpenAICompatibleClient(LLMClient):
 
 
 class AnthropicClient(LLMClient):
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type((httpx.HTTPError, ValidationError, json.JSONDecodeError)),
+        reraise=True,
+    )
+    def classify_tabs_batch(self, prompt: str) -> list[dict]:
+        payload = {
+            "model": self.settings.model,
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "system": _classification_system_prompt(self.settings),
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        headers = {
+            "x-api-key": self.settings.api_key,
+            "anthropic-version": self.settings.anthropic_version,
+        }
+        with httpx.Client(timeout=60) as client:
+            response = client.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers)
+            response.raise_for_status()
+        body = response.json()
+        chunks = body.get("content", [])
+        text = "".join(chunk.get("text", "") for chunk in chunks if chunk.get("type") == "text")
+        parsed = _extract_json_object(text)
+        return _extract_classification_list(parsed)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=8),
@@ -182,6 +291,32 @@ class BedrockClaudeClient(LLMClient):
         retry=retry_if_exception_type((ValidationError, json.JSONDecodeError)),
         reraise=True,
     )
+    def classify_tabs_batch(self, prompt: str) -> list[dict]:
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "system": _classification_system_prompt(self.settings),
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        response = self.client.invoke_model(
+            modelId=self.model_id,
+            body=json.dumps(payload).encode("utf-8"),
+            contentType="application/json",
+            accept="application/json",
+        )
+        body = json.loads(response["body"].read())
+        chunks = body.get("content", [])
+        text = "".join(chunk.get("text", "") for chunk in chunks if chunk.get("type") == "text")
+        parsed = _extract_json_object(text)
+        return _extract_classification_list(parsed)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type((ValidationError, json.JSONDecodeError)),
+        reraise=True,
+    )
     def summarize_page(self, prompt: str) -> PageSummary:
         payload = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -213,6 +348,37 @@ def build_llm_client(settings: Settings) -> LLMClient:
     if settings.provider == "bedrock":
         return BedrockClaudeClient(settings)
     raise ValueError(f"Unsupported provider: {settings.provider}")
+
+
+def _classification_system_prompt(settings: Settings) -> str:
+    priority_hint = ", ".join(settings.priority_keywords[:10]) if settings.priority_keywords else "none"
+    return (
+        "You are organizing a Chrome tab backlog for a busy user. "
+        "Classify each tab into a topic, rate its importance (high/medium/low), "
+        "give a brief reason, and flag whether it needs a detailed content summary "
+        "to be useful (needs_detailed_summary=true only for high-importance tabs where "
+        "the title/URL alone is not enough to understand the content).\n\n"
+        f"The user's high-priority topics include: {priority_hint}.\n\n"
+        "Return exactly one JSON object with a single key 'tabs' whose value is an array. "
+        "Each element must have: tab_id (string), topic (string), importance ('high'/'medium'/'low'), "
+        "reason (string, max 200 chars), needs_detailed_summary (boolean). "
+        "Do not include markdown."
+    )
+
+
+def _extract_classification_list(parsed: dict[str, Any]) -> list[dict]:
+    """Extract the tabs array from a classification response, tolerating varied structures."""
+    if isinstance(parsed, list):
+        return parsed
+    # Model returned {"tabs": [...]} or {"classifications": [...]} etc.
+    for key in ("tabs", "classifications", "results", "data"):
+        value = parsed.get(key)
+        if isinstance(value, list):
+            return value
+    # Fallback: if the dict looks like a single tab entry, wrap it
+    if "tab_id" in parsed:
+        return [parsed]
+    return []
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:

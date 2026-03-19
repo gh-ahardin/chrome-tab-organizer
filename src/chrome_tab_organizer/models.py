@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 class TabStatus(str, Enum):
     discovered = "discovered"
+    classified = "classified"
     extracted = "extracted"
     summarized = "summarized"
     grouped = "grouped"
@@ -23,6 +24,7 @@ class StageStatus(str, Enum):
 
 class PipelineStage(str, Enum):
     discover = "discover"
+    classify = "classify"
     extract = "extract"
     summarize = "summarize"
     export = "export"
@@ -131,8 +133,17 @@ class RunSummary(BaseModel):
     top_failure_domains: list[FailureDomainStat] = Field(default_factory=list)
 
 
+class TabClassification(BaseModel):
+    tab_id: str
+    topic: str = Field(min_length=2, max_length=120)
+    importance: str = Field(description="'high', 'medium', or 'low'")
+    reason: str = Field(max_length=300)
+    needs_detailed_summary: bool = False
+
+
 class PipelineTabRecord(BaseModel):
     tab: ChromeTab
+    classification: TabClassification | None = None
     content: ExtractedContent | None = None
     enrichment: TabEnrichment | None = None
     status: TabStatus = TabStatus.discovered

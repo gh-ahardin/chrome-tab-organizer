@@ -10,6 +10,7 @@ from chrome_tab_organizer.cache import SQLiteCache
 from chrome_tab_organizer.chrome import discover_window_tabs, get_chrome_window_count, preflight_chrome_access
 from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.enrichment import build_topic_groups, enrich_tabs, is_user_priority, rank_pages
+from chrome_tab_organizer.llm import build_llm_client
 from chrome_tab_organizer.exporters import (
     export_bookmark_html,
     export_json_snapshot,
@@ -23,6 +24,7 @@ from chrome_tab_organizer.models import (
     PipelineStage,
     PipelineTabRecord,
     RunSummary,
+    TabClassification,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,14 +82,62 @@ class OrganizerPipeline:
             )
             raise
 
+    def classify(self, window_index: int | None = None, sample_tabs: int | None = None) -> int:
+        """Batch-classify all unclassified tabs by title+URL+domain.
+
+        This stage uses a small number of LLM calls (one per ~40 tabs) to assign
+        topics and importance levels without fetching page content. Extraction is
+        then restricted to only the tabs flagged as high-priority or needing detail.
+        """
+        run_id = self.cache.start_stage_run(
+            PipelineStage.classify,
+            details={"window_index": window_index},
+        )
+        try:
+            tabs = self.cache.get_tabs_needing_classification(window_index=window_index)
+            tabs = self._limit_tabs(tabs, sample_tabs)
+            if not tabs:
+                logger.info("No tabs need classification.")
+                self.cache.finish_stage_run(run_id, details={"classified_tabs": 0})
+                return 0
+
+            client = build_llm_client(self.settings)
+            batch_size = 40
+            all_classifications: list[TabClassification] = []
+
+            for batch_start in range(0, len(tabs), batch_size):
+                batch = tabs[batch_start : batch_start + batch_size]
+                prompt = _build_classification_prompt(batch, self.settings)
+                raw_results = client.classify_tabs_batch(prompt)
+                classifications = _parse_classification_results(raw_results, batch)
+                all_classifications.extend(classifications)
+
+            self.cache.save_classifications(all_classifications)
+            self.cache.finish_stage_run(
+                run_id,
+                details={"classified_tabs": len(all_classifications), "window_index": window_index},
+            )
+            logger.info("Classified %s tabs", len(all_classifications))
+            return len(all_classifications)
+        except Exception as exc:  # noqa: BLE001
+            self.cache.fail_stage_run(run_id, error=str(exc), details={"window_index": window_index})
+            raise
+
     def extract(self, window_index: int | None = None, sample_tabs: int | None = None) -> int:
         run_id = self.cache.start_stage_run(
             PipelineStage.extract,
             details={"window_index": window_index},
         )
         try:
-            tabs = self.cache.get_tabs_missing_content(window_index=window_index)
-            tabs = self._limit_tabs(tabs, sample_tabs)
+            # Use the classification-aware query when classifications exist,
+            # falling back to the old "any tab missing content" query otherwise.
+            classified_tabs = self.cache.get_tabs_needing_extraction(window_index=window_index)
+            if classified_tabs:
+                tabs = self._limit_tabs(classified_tabs, sample_tabs)
+            else:
+                tabs = self._limit_tabs(
+                    self.cache.get_tabs_missing_content(window_index=window_index), sample_tabs
+                )
             if not tabs:
                 logger.info("No tabs need extraction.")
                 self.cache.finish_stage_run(run_id, details={"extracted_tabs": 0, "window_index": window_index})
@@ -197,8 +247,9 @@ class OrganizerPipeline:
     ) -> dict[str, Path]:
         self.discover(window_index=window_index, sample_tabs=sample_tabs)
         if dry_run:
-            logger.info("Dry run enabled. Skipping extraction, summarization, and export.")
+            logger.info("Dry run enabled. Skipping classification, extraction, summarization, and export.")
             return {}
+        self.classify(window_index=window_index, sample_tabs=sample_tabs)
         self.extract(window_index=window_index, sample_tabs=sample_tabs)
         self.summarize(window_index=window_index, sample_tabs=sample_tabs)
         return self.export(window_index=window_index)
@@ -347,3 +398,70 @@ class OrganizerPipeline:
         from datetime import UTC, datetime
 
         return datetime.now(UTC)
+
+
+def _build_classification_prompt(tabs: list[ChromeTab], settings) -> str:  # type: ignore[no-untyped-def]
+    lines = [
+        f"Classify these {len(tabs)} Chrome tabs for a user managing a large tab backlog.",
+        f"High-priority topics for this user: {', '.join(settings.priority_keywords[:10])}",
+        "",
+    ]
+    for index, tab in enumerate(tabs, start=1):
+        lines.append(
+            f'{index}. [{tab.tab_id}] Title: "{tab.title}" | URL: {tab.url} | Domain: {tab.domain}'
+        )
+    return "\n".join(lines)
+
+
+def _parse_classification_results(
+    raw_results: list[dict],
+    tabs: list[ChromeTab],
+) -> list[TabClassification]:
+    """Convert raw LLM classification dicts into validated TabClassification objects.
+
+    Falls back gracefully for any tab that is missing from the LLM response or
+    has invalid data.
+    """
+    tab_by_id = {tab.tab_id: tab for tab in tabs}
+    result_by_id: dict[str, dict] = {}
+    for item in raw_results:
+        tab_id = str(item.get("tab_id", "")).strip()
+        if tab_id:
+            result_by_id[tab_id] = item
+
+    classifications: list[TabClassification] = []
+    for tab in tabs:
+        raw = result_by_id.get(tab.tab_id)
+        if raw is None:
+            # LLM missed this tab — default to medium importance
+            classifications.append(TabClassification(
+                tab_id=tab.tab_id,
+                topic="general reference",
+                importance="medium",
+                reason="Not classified by LLM; defaulting to medium importance.",
+                needs_detailed_summary=False,
+            ))
+            continue
+        try:
+            importance = str(raw.get("importance", "medium")).lower().strip()
+            if importance not in {"high", "medium", "low"}:
+                importance = "medium"
+            topic = str(raw.get("topic") or "general reference").strip()[:120] or "general reference"
+            reason = str(raw.get("reason") or "").strip()[:300] or "Classified by LLM."
+            needs_detail = bool(raw.get("needs_detailed_summary", False))
+            classifications.append(TabClassification(
+                tab_id=tab.tab_id,
+                topic=topic,
+                importance=importance,
+                reason=reason,
+                needs_detailed_summary=needs_detail,
+            ))
+        except Exception:  # noqa: BLE001
+            classifications.append(TabClassification(
+                tab_id=tab.tab_id,
+                topic="general reference",
+                importance="medium",
+                reason="Classification failed; defaulting to medium importance.",
+                needs_detailed_summary=False,
+            ))
+    return classifications
