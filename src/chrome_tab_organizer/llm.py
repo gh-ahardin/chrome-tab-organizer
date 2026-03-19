@@ -69,7 +69,7 @@ class HeuristicLLMClient(LLMClient):
         domain = next((line.removeprefix("DOMAIN: ").strip() for line in lines if line.startswith("DOMAIN: ")), "unknown")
         text = next((line.removeprefix("TEXT: ").strip() for line in lines if line.startswith("TEXT: ")), "")
         snippet = text[:500] if text else "No extractable text was available."
-        category = _infer_category(f"{title} {domain} {snippet}")
+        category = _infer_category(f"{title} {snippet}", domain=domain)
         score = _heuristic_score(category, domain, snippet)
         return PageSummary(
             summary=f"{title} from {domain}. {snippet[:320]}",
@@ -260,7 +260,139 @@ def _system_prompt() -> str:
     )
 
 
-def _infer_category(text: str) -> str:
+# Domain-to-category map covering ~80 common domains.
+# Keys are lowercase bare domains (no www. prefix handled at call site).
+DOMAIN_CATEGORIES: dict[str, str] = {
+    # Development
+    "github.com": "software development",
+    "gitlab.com": "software development",
+    "stackoverflow.com": "software development",
+    "docs.python.org": "software development",
+    "developer.mozilla.org": "software development",
+    "docs.github.com": "software development",
+    "npmjs.com": "software development",
+    "pypi.org": "software development",
+    "crates.io": "software development",
+    "hub.docker.com": "software development",
+    "kubernetes.io": "software development",
+    "helm.sh": "software development",
+    "terraform.io": "software development",
+    # News & tech news
+    "news.ycombinator.com": "tech news",
+    "techcrunch.com": "tech news",
+    "theverge.com": "tech news",
+    "wired.com": "tech news",
+    "arstechnica.com": "tech news",
+    "venturebeat.com": "tech news",
+    # General news
+    "nytimes.com": "news",
+    "bbc.com": "news",
+    "bbc.co.uk": "news",
+    "reuters.com": "news",
+    "apnews.com": "news",
+    "theguardian.com": "news",
+    "wsj.com": "news",
+    "washingtonpost.com": "news",
+    "ft.com": "news",
+    "economist.com": "news",
+    # Shopping
+    "amazon.com": "shopping",
+    "amazon.co.uk": "shopping",
+    "ebay.com": "shopping",
+    "etsy.com": "shopping",
+    # Social & networking
+    "linkedin.com": "professional networking",
+    "twitter.com": "social media",
+    "x.com": "social media",
+    "facebook.com": "social media",
+    "instagram.com": "social media",
+    "reddit.com": "reddit",
+    "news.ycombinator.com": "tech news",
+    # Video
+    "youtube.com": "video",
+    "vimeo.com": "video",
+    "twitch.tv": "video",
+    # Writing & publishing
+    "medium.com": "articles",
+    "substack.com": "newsletters",
+    "ghost.io": "newsletters",
+    "hashnode.com": "articles",
+    "dev.to": "software development",
+    # Reference & knowledge
+    "wikipedia.org": "reference",
+    "en.wikipedia.org": "reference",
+    "wikimedia.org": "reference",
+    # Academic & research
+    "arxiv.org": "research papers",
+    "scholar.google.com": "research papers",
+    "semanticscholar.org": "research papers",
+    "researchgate.net": "research papers",
+    "ssrn.com": "research papers",
+    "springer.com": "research papers",
+    "ieee.org": "research papers",
+    "acm.org": "research papers",
+    # Cloud & work tools
+    "docs.google.com": "work documents",
+    "drive.google.com": "work documents",
+    "sheets.google.com": "work documents",
+    "slides.google.com": "work documents",
+    "notion.so": "work documents",
+    "airtable.com": "work documents",
+    "atlassian.com": "project management",
+    "jira.atlassian.com": "project management",
+    "confluence.atlassian.com": "work documents",
+    "trello.com": "project management",
+    "asana.com": "project management",
+    "app.asana.com": "project management",
+    # Communications
+    "mail.google.com": "email",
+    "outlook.com": "email",
+    "calendar.google.com": "calendar",
+    "zoom.us": "meetings",
+    "meet.google.com": "meetings",
+    # Finance
+    "finance.yahoo.com": "finance",
+    "bloomberg.com": "finance",
+    "investopedia.com": "finance",
+    "bankofamerica.com": "banking",
+    "chase.com": "banking",
+    "fidelity.com": "investing",
+    "schwab.com": "investing",
+    # Job search
+    "indeed.com": "job search",
+    "glassdoor.com": "job search",
+    "lever.co": "job search",
+    "greenhouse.io": "job search",
+    "workday.com": "job search",
+}
+
+# TLD-based fallback categories
+TLD_CATEGORIES: dict[str, str] = {
+    ".edu": "academic",
+    ".gov": "government",
+    ".org": "nonprofit / organization",
+}
+
+
+def _infer_category_from_domain(domain: str) -> str | None:
+    """Return a category for a domain, checking bare domain and www. strip."""
+    bare = domain.lower().removeprefix("www.")
+    category = DOMAIN_CATEGORIES.get(bare) or DOMAIN_CATEGORIES.get(domain.lower())
+    if category:
+        return category
+    for tld, cat in TLD_CATEGORIES.items():
+        if bare.endswith(tld):
+            return cat
+    return None
+
+
+def _infer_category(text: str, domain: str = "") -> str:
+    # Domain lookup takes highest precedence
+    if domain:
+        domain_category = _infer_category_from_domain(domain)
+        if domain_category:
+            return domain_category
+
     lowered = text.lower()
     if any(term in lowered for term in ["triple negative", "breast cancer", "clinical trial", "oncology"]):
         return "oncology research"
@@ -268,8 +400,12 @@ def _infer_category(text: str) -> str:
         return "histopathology"
     if any(term in lowered for term in ["deep learning", "machine learning", "artificial intelligence", "ai "]):
         return "ai and deep learning"
-    if "linkedin" in lowered:
-        return "linkedin inspiration"
+    if "kubernetes" in lowered or "docker" in lowered or "terraform" in lowered:
+        return "software development"
+    if "recipe" in lowered or "cooking" in lowered or "ingredient" in lowered:
+        return "food and cooking"
+    if "javascript" in lowered or "python " in lowered or "typescript" in lowered:
+        return "software development"
     return "general reference"
 
 

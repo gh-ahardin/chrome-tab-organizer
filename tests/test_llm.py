@@ -6,6 +6,7 @@ from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.llm import (
     HeuristicLLMClient,
     _extract_json_object,
+    _infer_category_from_domain,
     _system_prompt,
     _validate_page_summary,
 )
@@ -94,6 +95,39 @@ def test_heuristic_client_produces_valid_page_summary() -> None:
     assert isinstance(result, PageSummary)
     assert len(result.summary) >= 20
     assert 0 <= result.importance_score <= 100
+
+
+# --- domain-to-category mapping ---
+
+def test_infer_category_from_github_domain() -> None:
+    assert _infer_category_from_domain("github.com") == "software development"
+
+
+def test_infer_category_from_www_prefixed_domain() -> None:
+    assert _infer_category_from_domain("www.github.com") == "software development"
+
+
+def test_infer_category_from_linkedin_domain() -> None:
+    assert _infer_category_from_domain("linkedin.com") == "professional networking"
+
+
+def test_infer_category_from_edu_tld() -> None:
+    assert _infer_category_from_domain("university.edu") == "academic"
+
+
+def test_infer_category_from_gov_tld() -> None:
+    assert _infer_category_from_domain("some.agency.gov") == "government"
+
+
+def test_infer_category_returns_none_for_unknown_domain() -> None:
+    assert _infer_category_from_domain("totally-unknown-site-xyz.io") is None
+
+
+def test_heuristic_client_uses_domain_for_category() -> None:
+    client = HeuristicLLMClient(Settings())
+    prompt = _make_prompt("Some Repo", "github.com", "Source code and documentation.")
+    result = client.summarize_page(prompt)
+    assert result.category == "software development"
 
 
 def test_heuristic_client_scores_oncology_content_higher() -> None:
