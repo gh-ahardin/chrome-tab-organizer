@@ -140,6 +140,40 @@ def test_normalize_url_preserves_meaningful_query_params() -> None:
     assert "page=2" in result
 
 
+def test_normalize_url_strips_utm_params() -> None:
+    url = "https://example.com/article?utm_source=twitter&utm_medium=social&utm_campaign=launch"
+    result = normalize_url_for_fingerprint(url)
+    assert "utm_source" not in result
+    assert "utm_medium" not in result
+    assert "utm_campaign" not in result
+
+
+def test_normalize_url_strips_fbclid_and_gclid() -> None:
+    url = "https://example.com/page?fbclid=abc123&gclid=xyz789"
+    result = normalize_url_for_fingerprint(url)
+    assert "fbclid" not in result
+    assert "gclid" not in result
+
+
+def test_normalize_url_preserves_meaningful_params_alongside_tracking() -> None:
+    url = "https://example.com/search?q=cancer+trial&utm_source=email&page=2"
+    result = normalize_url_for_fingerprint(url)
+    assert "q=cancer" in result
+    assert "page=2" in result
+    assert "utm_source" not in result
+
+
+def test_normalize_url_tabs_with_same_url_different_tracking_get_same_fingerprint() -> None:
+    url_a = "https://example.com/article?utm_source=twitter"
+    url_b = "https://example.com/article?utm_source=email"
+    url_c = "https://example.com/article"
+    from chrome_tab_organizer.chrome import compute_stable_tab_base_key
+    key_a = compute_stable_tab_base_key(url=url_a, title="Same Article")
+    key_b = compute_stable_tab_base_key(url=url_b, title="Same Article")
+    key_c = compute_stable_tab_base_key(url=url_c, title="Same Article")
+    assert key_a == key_b == key_c
+
+
 # --- compute_stable_tab_base_key ---
 
 def test_compute_stable_tab_base_key_is_deterministic() -> None:

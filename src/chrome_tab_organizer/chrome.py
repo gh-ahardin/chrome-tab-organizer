@@ -4,12 +4,23 @@ import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from chrome_tab_organizer.models import ChromeTab
 
 LIVE_SNAPSHOT_TEXT_LIMIT = 50_000
 LIVE_SNAPSHOT_FRAME_LIMIT = 10
+
+# Query parameters that carry no semantic meaning and should be stripped
+# before fingerprinting a URL for duplicate detection.
+TRACKING_PARAMS: frozenset[str] = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_reader", "utm_place",
+    "fbclid", "gclid", "dclid", "msclkid", "twclid",
+    "mc_cid", "mc_eid",
+    "_hsenc", "_hsmi", "hsCtaTracking",
+    "igshid", "s_cid", "ncid", "yclid",
+})
 
 WINDOW_COUNT_SCRIPT = r'''
 tell application "Google Chrome"
@@ -206,12 +217,18 @@ def normalize_url_for_fingerprint(url: str) -> str:
     path = parsed.path or "/"
     if path != "/" and path.endswith("/"):
         path = path[:-1]
+    if parsed.query:
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        filtered = {k: v for k, v in params.items() if k.lower() not in TRACKING_PARAMS}
+        query = urlencode(filtered, doseq=True)
+    else:
+        query = ""
     normalized = parsed._replace(
         scheme=parsed.scheme.lower(),
         netloc=parsed.netloc.lower(),
         path=path,
         params="",
-        query=parsed.query,
+        query=query,
         fragment="",
     )
     return urlunparse(normalized)
