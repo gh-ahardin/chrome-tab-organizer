@@ -16,6 +16,7 @@ from chrome_tab_organizer.exporters import (
     export_json_snapshot,
     export_markdown_report,
     export_run_summary,
+    export_safe_to_close,
 )
 from chrome_tab_organizer.extraction import extract_tabs
 from chrome_tab_organizer.models import (
@@ -220,9 +221,10 @@ class OrganizerPipeline:
                     run_summary,
                     priority_label=self.settings.priority_label,
                 ),
-                "bookmarks": export_bookmark_html(self.settings.output_dir, complete_records),
+                "bookmarks": export_bookmark_html(self.settings.output_dir, records),
                 "json": export_json_snapshot(self.settings.output_dir, records),
                 "summary": export_run_summary(self.settings.output_dir, run_summary),
+                "safe_to_close": export_safe_to_close(self.settings.output_dir, records),
             }
             self.cache.finish_stage_run(
                 run_id,

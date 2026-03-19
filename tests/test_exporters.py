@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from chrome_tab_organizer.exporters import export_bookmark_html, export_markdown_report, export_run_summary
+from chrome_tab_organizer.exporters import export_bookmark_html, export_markdown_report, export_run_summary, export_safe_to_close
+from chrome_tab_organizer.models import TabClassification
 from chrome_tab_organizer.models import (
     ChromeTab,
     ExtractedContent,
@@ -200,3 +201,66 @@ def test_export_bookmark_html_groups_by_topic(tmp_path: Path) -> None:
     assert content.count("Topic Alpha") >= 1
     assert "Page Alpha" in content
     assert "Page Beta" in content
+
+
+# --- export_safe_to_close ---
+
+def _make_record_with_classification(
+    tab_id: str,
+    title: str,
+    importance: str,
+    duplicate_of: str | None = None,
+) -> PipelineTabRecord:
+    tab = ChromeTab(
+        tab_id=tab_id,
+        stable_key=tab_id,
+        fingerprint_key=f"fp-{tab_id}",
+        window_index=1,
+        tab_index=int(tab_id[-1]) if tab_id[-1].isdigit() else 1,
+        title=title,
+        url=f"https://example.com/{tab_id}",
+        domain="example.com",
+        discovered_at=datetime.now(UTC),
+        duplicate_of_tab_id=duplicate_of,
+    )
+    classification = TabClassification(
+        tab_id=tab_id,
+        topic="general reference",
+        importance=importance,
+        reason="Test classification.",
+        needs_detailed_summary=importance == "high",
+    )
+    return PipelineTabRecord(tab=tab, classification=classification)
+
+
+def test_export_safe_to_close_includes_duplicates(tmp_path: Path) -> None:
+    canonical = _make_record_with_classification("tab-1", "Original Page", "medium")
+    duplicate = _make_record_with_classification("tab-2", "Same Page", "medium", duplicate_of="tab-1")
+    path = export_safe_to_close(tmp_path, [canonical, duplicate])
+    content = path.read_text(encoding="utf-8")
+    assert "Duplicates" in content
+    assert "Same Page" in content
+
+
+def test_export_safe_to_close_includes_low_importance_tabs(tmp_path: Path) -> None:
+    high = _make_record_with_classification("tab-1", "Important Page", "high")
+    low = _make_record_with_classification("tab-2", "Low Priority Page", "low")
+    path = export_safe_to_close(tmp_path, [high, low])
+    content = path.read_text(encoding="utf-8")
+    assert "Low priority" in content
+    assert "Low Priority Page" in content
+    assert "Important Page" not in content
+
+
+def test_export_safe_to_close_excludes_high_importance_tabs(tmp_path: Path) -> None:
+    high = _make_record_with_classification("tab-1", "Clinical Trial Page", "high")
+    path = export_safe_to_close(tmp_path, [high])
+    content = path.read_text(encoding="utf-8")
+    assert "Clinical Trial Page" not in content
+    assert "No tabs identified" in content
+
+
+def test_export_safe_to_close_creates_file(tmp_path: Path) -> None:
+    path = export_safe_to_close(tmp_path, [])
+    assert path.exists()
+    assert path.suffix == ".md"

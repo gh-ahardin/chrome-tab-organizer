@@ -139,6 +139,42 @@ def export_run_summary(output_dir: Path, run_summary: RunSummary) -> Path:
     return summary_path
 
 
+def export_safe_to_close(output_dir: Path, records: list[PipelineTabRecord]) -> Path:
+    path = output_dir / "safe_to_close.md"
+    lines: list[str] = ["# Tabs that are probably safe to close", ""]
+
+    duplicates = [r for r in records if r.tab.duplicate_of_tab_id is not None]
+    if duplicates:
+        lines.append(f"## Duplicates ({len(duplicates)} tabs)")
+        lines.append("These tabs are duplicates of other open tabs.")
+        lines.append("")
+        for r in duplicates:
+            lines.append(f"- Window {r.tab.window_index}, Tab {r.tab.tab_index}: {r.tab.title}")
+            lines.append(f"  {r.tab.url}")
+        lines.append("")
+
+    low = [
+        r for r in records
+        if r.classification and r.classification.importance == "low"
+        and r.tab.duplicate_of_tab_id is None
+    ]
+    if low:
+        lines.append(f"## Low priority ({len(low)} tabs)")
+        lines.append("These tabs were classified as low importance and have been bookmarked.")
+        lines.append("")
+        for r in low:
+            topic = r.classification.topic if r.classification else "uncategorized"
+            lines.append(f"- [{topic.title()}] {r.tab.title}")
+            lines.append(f"  {r.tab.url}")
+        lines.append("")
+
+    if not duplicates and not low:
+        lines.append("No tabs identified as safe to close at this time.")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 def build_report_bundle(
     records: list[PipelineTabRecord],
     topics: list[TopicGroup],
