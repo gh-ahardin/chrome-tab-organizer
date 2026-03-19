@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 from chrome_tab_organizer.config import Settings
 from chrome_tab_organizer.extraction import (
     _capture_live_tab_snapshot_with_retry,
+    _content_indicates_access_wall,
+    _domain_allowed,
     _should_retry_live_session_with_longer_delay,
+    _skip_live_session_for_domain,
     extract_from_live_session,
     extract_single_tab,
     extract_tabs,
@@ -382,3 +385,107 @@ def test_should_not_retry_live_session_with_longer_delay_after_timeout() -> None
     )
 
     assert should_retry is False
+
+
+# --- _domain_allowed ---
+
+def test_domain_allowed_no_filters() -> None:
+    settings = Settings()
+    assert _domain_allowed("example.com", settings) is True
+
+
+def test_domain_allowed_include_list_passes_listed_domain() -> None:
+    settings = Settings(include_domains=["example.com", "github.com"])
+    assert _domain_allowed("example.com", settings) is True
+
+
+def test_domain_allowed_include_list_blocks_unlisted_domain() -> None:
+    settings = Settings(include_domains=["example.com"])
+    assert _domain_allowed("other.com", settings) is False
+
+
+def test_domain_allowed_exclude_list_blocks_listed_domain() -> None:
+    settings = Settings(exclude_domains=["spam.com"])
+    assert _domain_allowed("spam.com", settings) is False
+    assert _domain_allowed("example.com", settings) is True
+
+
+def test_domain_allowed_exclude_beats_include_when_both_match() -> None:
+    settings = Settings(include_domains=["spam.com"], exclude_domains=["spam.com"])
+    assert _domain_allowed("spam.com", settings) is False
+
+
+# --- _content_indicates_access_wall ---
+
+def _make_content(
+    *,
+    raw_text: str = "",
+    final_url: str = "https://example.com/page",
+    title: str = "Test",
+    excerpt: str | None = None,
+) -> ExtractedContent:
+    return ExtractedContent(
+        tab_id="t",
+        final_url=final_url,
+        status_code=200,
+        content_type="text/html",
+        title=title,
+        excerpt=excerpt,
+        raw_text=raw_text,
+        text_char_count=len(raw_text),
+        extraction_method="test",
+        fetched_at=datetime.now(UTC),
+    )
+
+
+def test_access_wall_detected_via_login_in_url() -> None:
+    content = _make_content(final_url="https://example.com/login?return_to=/page")
+    assert _content_indicates_access_wall(content) is True
+
+
+def test_access_wall_detected_via_signin_in_url() -> None:
+    content = _make_content(final_url="https://example.com/signin")
+    assert _content_indicates_access_wall(content) is True
+
+
+def test_access_wall_detected_via_sign_in_in_text() -> None:
+    content = _make_content(raw_text="Please sign in to continue reading this article.")
+    assert _content_indicates_access_wall(content) is True
+
+
+def test_access_wall_detected_via_log_in_in_text() -> None:
+    content = _make_content(raw_text="You must log in to access this content.")
+    assert _content_indicates_access_wall(content) is True
+
+
+def test_access_wall_detected_via_subscribe_to_continue() -> None:
+    content = _make_content(raw_text="Subscribe to continue reading premium content.")
+    assert _content_indicates_access_wall(content) is True
+
+
+def test_access_wall_not_triggered_for_normal_content() -> None:
+    content = _make_content(raw_text="This is a great article about machine learning techniques.")
+    assert _content_indicates_access_wall(content) is False
+
+
+# --- _skip_live_session_for_domain ---
+
+def test_skip_live_session_for_youtube() -> None:
+    settings = Settings()
+    assert _skip_live_session_for_domain("youtube.com", settings) is True
+
+
+def test_skip_live_session_for_www_youtube_subdomain() -> None:
+    settings = Settings()
+    assert _skip_live_session_for_domain("www.youtube.com", settings) is True
+
+
+def test_skip_live_session_not_triggered_for_unlisted_domain() -> None:
+    settings = Settings()
+    assert _skip_live_session_for_domain("github.com", settings) is False
+
+
+def test_skip_live_session_respects_custom_skip_list() -> None:
+    settings = Settings(live_session_skip_domains=["badsite.com"])
+    assert _skip_live_session_for_domain("badsite.com", settings) is True
+    assert _skip_live_session_for_domain("youtube.com", settings) is False

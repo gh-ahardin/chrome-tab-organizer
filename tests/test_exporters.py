@@ -108,3 +108,95 @@ def test_exporters_write_files(tmp_path: Path) -> None:
     assert "Top 10 Pages To Read Next" in report.read_text(encoding="utf-8")
     assert "Medical Safety Note" in report.read_text(encoding="utf-8")
     assert "Bookmarks" in bookmarks.read_text(encoding="utf-8")
+
+
+def test_export_bookmark_html_escapes_special_characters(tmp_path: Path) -> None:
+    tab = ChromeTab(
+        tab_id="xss-1",
+        stable_key="xss-1",
+        fingerprint_key="fp-xss",
+        window_index=1,
+        tab_index=1,
+        title="<script>alert('xss')</script>",
+        url="https://example.com/page?a=1&b=2",
+        domain="example.com",
+        discovered_at=datetime.now(UTC),
+    )
+    enrichment = TabEnrichment(
+        tab_id="xss-1",
+        topic="Dangerous <Topic> & More",
+        topic_reason="Testing escaping.",
+        summary=PageSummary(
+            summary="A compact summary for testing HTML escaping.",
+            why_it_matters="Ensures XSS characters are escaped.",
+            category="test",
+            topic_candidates=["test"],
+            key_points=["Escaping works"],
+            follow_up_actions=["Verify"],
+            clinical_relevance=1,
+            personal_relevance=1,
+            novelty=1,
+            urgency=1,
+            importance_score=10,
+        ),
+        summarized_at=datetime.now(UTC),
+        provider="none",
+        model="heuristic",
+    )
+    record = PipelineTabRecord(tab=tab, enrichment=enrichment, status=TabStatus.grouped)
+    path = export_bookmark_html(tmp_path, [record])
+    content = path.read_text(encoding="utf-8")
+
+    assert "<script>" not in content
+    assert "&lt;script&gt;" in content
+    assert "&amp;" in content
+
+
+def test_export_bookmark_html_groups_by_topic(tmp_path: Path) -> None:
+    def make_record(tab_id: str, title: str, topic: str) -> PipelineTabRecord:
+        tab = ChromeTab(
+            tab_id=tab_id,
+            stable_key=tab_id,
+            fingerprint_key=f"fp-{tab_id}",
+            window_index=1,
+            tab_index=int(tab_id[-1]),
+            title=title,
+            url=f"https://example.com/{tab_id}",
+            domain="example.com",
+            discovered_at=datetime.now(UTC),
+        )
+        enrichment = TabEnrichment(
+            tab_id=tab_id,
+            topic=topic,
+            topic_reason="Grouped by topic.",
+            summary=PageSummary(
+                summary="A compact summary of content for topic grouping.",
+                why_it_matters="Test grouping.",
+                category=topic.lower(),
+                topic_candidates=[topic.lower()],
+                key_points=["Point"],
+                follow_up_actions=["Act"],
+                clinical_relevance=1,
+                personal_relevance=1,
+                novelty=1,
+                urgency=1,
+                importance_score=30,
+            ),
+            summarized_at=datetime.now(UTC),
+            provider="none",
+            model="heuristic",
+        )
+        return PipelineTabRecord(tab=tab, enrichment=enrichment, status=TabStatus.grouped)
+
+    records = [
+        make_record("tab-1", "Page Alpha", "Topic Alpha"),
+        make_record("tab-2", "Page Beta", "Topic Beta"),
+        make_record("tab-3", "Page Alpha 2", "Topic Alpha"),
+    ]
+    path = export_bookmark_html(tmp_path, records)
+    content = path.read_text(encoding="utf-8")
+
+    assert content.index("Topic Alpha") < content.index("Topic Beta")
+    assert content.count("Topic Alpha") >= 1
+    assert "Page Alpha" in content
+    assert "Page Beta" in content

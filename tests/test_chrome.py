@@ -5,6 +5,8 @@ from chrome_tab_organizer.chrome import (
     LIVE_SNAPSHOT_TEXT_LIMIT,
     build_live_snapshot_script_lines,
     classify_live_session_error,
+    compute_stable_tab_base_key,
+    normalize_url_for_fingerprint,
     preflight_chrome_access,
     probe_live_javascript_support,
     capture_live_tab_snapshot,
@@ -111,3 +113,67 @@ def test_capture_live_tab_snapshot_limits_payload_before_return(monkeypatch) -> 
     assert any(f"const FRAME_LIMIT = {LIVE_SNAPSHOT_FRAME_LIMIT};" in part for part in command)
     assert any("slice(0, FRAME_LIMIT)" in part for part in command)
     assert captured["timeout"] >= 10
+
+
+# --- normalize_url_for_fingerprint ---
+
+def test_normalize_url_strips_fragment() -> None:
+    assert normalize_url_for_fingerprint("https://example.com/page#section") == "https://example.com/page"
+
+
+def test_normalize_url_lowercases_scheme_and_host() -> None:
+    assert normalize_url_for_fingerprint("HTTPS://EXAMPLE.COM/page") == "https://example.com/page"
+
+
+def test_normalize_url_strips_trailing_slash_on_path() -> None:
+    assert normalize_url_for_fingerprint("https://example.com/page/") == "https://example.com/page"
+
+
+def test_normalize_url_preserves_root_slash() -> None:
+    result = normalize_url_for_fingerprint("https://example.com/")
+    assert result.startswith("https://example.com")
+
+
+def test_normalize_url_preserves_meaningful_query_params() -> None:
+    result = normalize_url_for_fingerprint("https://example.com/search?q=hello&page=2")
+    assert "q=hello" in result
+    assert "page=2" in result
+
+
+# --- compute_stable_tab_base_key ---
+
+def test_compute_stable_tab_base_key_is_deterministic() -> None:
+    key1 = compute_stable_tab_base_key(url="https://example.com/page", title="Example Page")
+    key2 = compute_stable_tab_base_key(url="https://example.com/page", title="Example Page")
+    assert key1 == key2
+
+
+def test_compute_stable_tab_base_key_differs_for_different_urls() -> None:
+    key1 = compute_stable_tab_base_key(url="https://example.com/page1", title="Page")
+    key2 = compute_stable_tab_base_key(url="https://example.com/page2", title="Page")
+    assert key1 != key2
+
+
+def test_compute_stable_tab_base_key_is_16_chars() -> None:
+    key = compute_stable_tab_base_key(url="https://example.com/", title="Home")
+    assert len(key) == 16
+
+
+# --- additional classify_live_session_error cases ---
+
+def test_classify_live_session_error_for_window_index_change() -> None:
+    reason, message = classify_live_session_error("Window index out of range")
+    assert reason == "window_index_out_of_range"
+    assert "window index changed" in message.lower()
+
+
+def test_classify_live_session_error_for_automation_not_authorized() -> None:
+    reason, message = classify_live_session_error("Not authorized to send Apple events to Google Chrome")
+    assert reason == "automation_not_authorized"
+    assert "Automation permission" in message
+
+
+def test_classify_live_session_error_for_unknown_error() -> None:
+    reason, message = classify_live_session_error("Some unexpected Chrome error occurred")
+    assert reason == "live_session_error"
+    assert message == "Some unexpected Chrome error occurred"
