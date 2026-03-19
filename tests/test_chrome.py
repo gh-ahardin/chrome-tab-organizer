@@ -54,6 +54,12 @@ def test_classify_live_session_error_for_tab_index_change() -> None:
     assert "tab index changed" in message.lower()
 
 
+def test_classify_live_session_error_for_appleevent_timeout() -> None:
+    reason, message = classify_live_session_error("Google Chrome got an error: AppleEvent timed out. (-1712)")
+    assert reason == "appleevent_timed_out"
+    assert "timed out" in message.lower()
+
+
 def test_probe_live_javascript_support_reports_disabled_js(monkeypatch) -> None:
     monkeypatch.setattr("chrome_tab_organizer.chrome.preflight_chrome_access", lambda: (True, None))
 
@@ -88,6 +94,7 @@ def test_capture_live_tab_snapshot_limits_payload_before_return(monkeypatch) -> 
 
     def fake_run(command, **kwargs):
         captured["command"] = command
+        captured["timeout"] = kwargs.get("timeout")
 
         class Result:
             stdout = '{"title":"Example","url":"https://example.com","text":"hello","text_char_count":5}'
@@ -103,3 +110,4 @@ def test_capture_live_tab_snapshot_limits_payload_before_return(monkeypatch) -> 
     assert any(f"const TEXT_LIMIT = {LIVE_SNAPSHOT_TEXT_LIMIT};" in part for part in command)
     assert any(f"const FRAME_LIMIT = {LIVE_SNAPSHOT_FRAME_LIMIT};" in part for part in command)
     assert any("slice(0, FRAME_LIMIT)" in part for part in command)
+    assert captured["timeout"] >= 10

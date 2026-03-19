@@ -19,7 +19,7 @@ It is designed for large browsing sessions of roughly 300 to 500 tabs, with resu
 The MVP implemented here:
 
 - Reads Chrome windows and tabs through AppleScript
-- Extracts content from the active logged-in Chrome session before any network refetch
+- Extracts public pages over HTTP first and reserves active Chrome session reads for priority/authenticated cases
 - Downloads and extracts article-like text from page URLs
 - Caches tabs, extracted content, summaries, and topics in SQLite
 - Journals pipeline stages so interrupted runs are visible and recoverable
@@ -51,6 +51,7 @@ The MVP implemented here:
 
 - The tool does not close tabs.
 - The tool does not move tabs permanently.
+- For public pages it prefers HTTP extraction to avoid waking Chrome tabs unnecessarily.
 - During live session extraction it briefly activates tabs and then restores the previously active tab in that window.
 - Duplicate tabs of the same page are kept in the raw cache snapshot but only processed once.
 - A second duplicate pass runs after extraction, so near-identical pages that resolve to the same final URL and content are merged before summarization.
@@ -140,7 +141,7 @@ Environment variables are loaded from `.env`.
 | `CTO_MAX_CONCURRENCY` | Concurrent extraction workers |
 | `CTO_LLM_MAX_CONCURRENCY` | Concurrent summarization workers for LLM calls |
 | `CTO_LLM_MAX_INPUT_CHARS` | Max extracted text characters sent to LLM |
-| `CTO_PREFER_LIVE_CHROME_SESSION` | Read content from active Chrome session before HTTP fetch |
+| `CTO_PREFER_LIVE_CHROME_SESSION` | Allow live Chrome session extraction for priority/authenticated pages or when HTTP extraction looks blocked/insufficient |
 | `CTO_REQUIRE_LIVE_CHROME_SESSION` | Fail fast if Chrome session DOM extraction is unavailable instead of silently falling back to HTTP |
 | `CTO_SESSION_EXTRACT_TIMEOUT_SECONDS` | AppleScript timeout for live session extraction |
 | `CTO_SESSION_EXTRACT_ATTEMPTS` | Retry count for live DOM extraction |
@@ -177,10 +178,11 @@ CTO_REQUIRE_LIVE_CHROME_SESSION=true chrome-tab-organizer run --window-index 1 -
 
 That will stop immediately if Chrome blocks JavaScript from automation, instead of completing with HTTP fallback only.
 
-To improve reliability on authenticated or dynamic sites while keeping runtime reasonable, the current defaults do two things:
+To improve reliability on authenticated or dynamic sites while keeping runtime and Chrome memory pressure reasonable, the current defaults do two things:
 
 - run Bedrock summarization with bounded concurrency (`CTO_LLM_MAX_CONCURRENCY=4`)
 - treat domains such as LinkedIn, Reddit, SharePoint, and Google Docs as live-session priority domains with a longer activation delay and a lower live-text acceptance threshold
+- use HTTP-first extraction for non-priority domains and only wake Chrome when HTTP content looks blocked, login-gated, or too short
 
 If you want a more conservative live-session pass for logged-in tabs, use:
 

@@ -24,6 +24,7 @@ application "Google Chrome" is running
 LIVE_SESSION_JS_DISABLED_MARKER = "Executing JavaScript through AppleScript is turned off"
 WINDOW_INDEX_OUT_OF_RANGE_MARKER = "Window index out of range"
 TAB_INDEX_OUT_OF_RANGE_MARKER = "Tab index out of range"
+APPLE_EVENT_TIMEOUT_MARKER = "AppleEvent timed out"
 AUTOMATION_NOT_AUTHORIZED_MARKERS = (
     "Not authorized to send Apple events",
     "not authorized to send apple events",
@@ -69,6 +70,8 @@ def classify_live_session_error(detail: str) -> tuple[str, str]:
         return ("tab_index_out_of_range", "Chrome tab index changed during extraction.")
     if WINDOW_INDEX_OUT_OF_RANGE_MARKER in message:
         return ("window_index_out_of_range", "Chrome window index changed during extraction.")
+    if APPLE_EVENT_TIMEOUT_MARKER in message:
+        return ("appleevent_timed_out", "Google Chrome automation timed out during live extraction.")
     if LIVE_SESSION_JS_DISABLED_MARKER in message:
         return (
             "javascript_from_apple_events_disabled",
@@ -294,8 +297,16 @@ def capture_live_tab_snapshot(
             capture_output=True,
             text=True,
             check=True,
+            timeout=max(timeout_seconds + activation_delay_seconds + 2.0, 5.0),
         )
         return json.loads(result.stdout)
+    except subprocess.TimeoutExpired as exc:
+        raise subprocess.CalledProcessError(
+            124,
+            exc.cmd,
+            output=exc.output,
+            stderr=f"Google Chrome got an error: {APPLE_EVENT_TIMEOUT_MARKER}. (-1712)",
+        ) from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
         _, message = classify_live_session_error(detail)

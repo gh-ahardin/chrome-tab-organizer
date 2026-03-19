@@ -25,6 +25,16 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - depends on environment
     trafilatura = None
 
+ACCESS_WALL_TEXT_MARKERS = (
+    "sign in",
+    "log in",
+    "login",
+    "subscribe to continue",
+    "create an account",
+    "join to continue",
+    "access denied",
+)
+
 
 def _domain_allowed(domain: str, settings: Settings) -> bool:
     normalized = domain.lower()
@@ -69,6 +79,180 @@ def _safe_final_url(candidate_url: str | None, fallback_url: str) -> str:
     if value.startswith(("http://", "https://")):
         return value
     return fallback_url
+
+
+def _should_retry_live_session_with_longer_delay(
+    live_content: ExtractedContent | None,
+    live_error: str | None,
+    *,
+    live_min_chars: int,
+    activation_delay_seconds: float,
+    settings: Settings,
+) -> bool:
+    if settings.live_session_retry_activation_delay_seconds <= activation_delay_seconds:
+        return False
+    if live_content is not None and live_content.text_char_count >= live_min_chars:
+        return False
+    normalized_error = (live_error or "").lower()
+    hard_failures = (
+        "timed out",
+        "tab index changed",
+        "window index changed",
+        "javascript execution from automation",
+        "automation permission",
+    )
+    return not any(marker in normalized_error for marker in hard_failures)
+
+
+def _content_indicates_access_wall(content: ExtractedContent) -> bool:
+    final_url = str(content.final_url or "").lower()
+    if any(marker in final_url for marker in ("/login", "/signin", "/auth", "return_to=")):
+        return True
+    combined = " ".join(
+        part for part in (content.title, content.excerpt, content.raw_text[:400], content.error) if part
+    ).lower()
+    return any(marker in combined for marker in ACCESS_WALL_TEXT_MARKERS)
+
+
+def _should_attempt_live_session_after_http(
+    tab: ChromeTab,
+    http_content: ExtractedContent,
+    settings: Settings,
+) -> bool:
+    if not settings.prefer_live_chrome_session or _skip_live_session_for_domain(tab.domain, settings):
+        return False
+    if http_content.extraction_method == "error":
+        return True
+    if (http_content.status_code or 0) >= 400:
+        return True
+    if _content_indicates_access_wall(http_content):
+        return True
+    return http_content.text_char_count < _live_session_min_chars(tab.domain, settings)
+
+
+def _attach_live_session_metadata(
+    content: ExtractedContent,
+    *,
+    live_attempted: bool,
+    live_succeeded: bool,
+    live_skipped: bool,
+    live_skip_reason: str | None,
+    live_error: str | None,
+    live_text_char_count: int,
+    live_rejected_as_too_short: bool,
+) -> ExtractedContent:
+    content.live_session_attempted = live_attempted
+    content.live_session_succeeded = live_succeeded
+    content.live_session_skipped = live_skipped
+    content.live_session_skip_reason = live_skip_reason
+    content.live_session_error = live_error
+    content.live_session_text_char_count = live_text_char_count
+    content.live_session_rejected_as_too_short = live_rejected_as_too_short
+    return content
+
+
+def _extract_via_http(
+    tab: ChromeTab,
+    settings: Settings,
+    fetched_at: datetime,
+    *,
+    http_fallback_used: bool,
+) -> ExtractedContent:
+    with httpx.Client(
+        follow_redirects=True,
+        timeout=settings.fetch_timeout_seconds,
+        headers={"User-Agent": "chrome-tab-organizer/0.1"},
+    ) as client:
+        response = client.get(str(tab.url))
+    html = response.text
+
+    extracted = (
+        trafilatura.extract(
+            html,
+            include_comments=False,
+            include_formatting=False,
+            favor_precision=True,
+        )
+        if trafilatura is not None
+        else None
+    )
+    title = tab.title
+    excerpt: str | None = None
+    method = "trafilatura"
+    raw_text = (extracted or "").strip()
+
+    soup: BeautifulSoup | None = None
+    if not raw_text:
+        soup = BeautifulSoup(html, "html.parser")
+        title = (soup.title.string if soup.title and soup.title.string else title).strip()
+        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+        raw_text = "\n\n".join(text for text in paragraphs if text)
+        excerpt = next((text[:280] for text in paragraphs if text), None)
+        method = "beautifulsoup_paragraphs"
+
+    if not raw_text:
+        if soup is None:
+            soup = BeautifulSoup(html, "html.parser")
+        body_text = soup.get_text(" ", strip=True)
+        raw_text = body_text[:4000]
+        excerpt = raw_text[:280] if raw_text else None
+        method = "beautifulsoup_body"
+
+    return ExtractedContent(
+        tab_id=tab.tab_id,
+        final_url=_safe_final_url(str(response.url), str(tab.url)),
+        status_code=response.status_code,
+        content_type=response.headers.get("content-type"),
+        title=title[:500],
+        excerpt=excerpt,
+        raw_text=raw_text,
+        text_char_count=len(raw_text),
+        extraction_method=method,
+        http_fallback_used=http_fallback_used,
+        fetched_at=fetched_at,
+        error=(
+            f"Non-200 status during HTTP fallback: {response.status_code}"
+            if http_fallback_used and response.status_code >= 400
+            else None
+        ),
+    )
+
+
+def _attempt_live_session(
+    tab: ChromeTab,
+    settings: Settings,
+    fetched_at: datetime,
+    *,
+    live_min_chars: int,
+    activation_delay_seconds: float,
+) -> tuple[ExtractedContent | None, str | None, int, bool]:
+    live_content, live_error = extract_from_live_session(
+        tab,
+        settings,
+        fetched_at,
+        activation_delay_seconds=activation_delay_seconds,
+    )
+    if _should_retry_live_session_with_longer_delay(
+        live_content,
+        live_error,
+        live_min_chars=live_min_chars,
+        activation_delay_seconds=activation_delay_seconds,
+        settings=settings,
+    ):
+        retry_content, retry_error = extract_from_live_session(
+            tab,
+            settings,
+            fetched_at,
+            activation_delay_seconds=settings.live_session_retry_activation_delay_seconds,
+        )
+        if retry_content and (live_content is None or retry_content.text_char_count >= live_content.text_char_count):
+            live_content = retry_content
+            live_error = retry_error
+    live_text_char_count = live_content.text_char_count if live_content else 0
+    live_rejected_as_too_short = bool(
+        live_content is not None and live_content.text_char_count < live_min_chars
+    )
+    return live_content, live_error, live_text_char_count, live_rejected_as_too_short
 
 
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
@@ -146,8 +330,9 @@ def extract_single_tab(
         live_rejected_as_too_short = False
         live_min_chars = _live_session_min_chars(tab.domain, settings)
         activation_delay_seconds = _live_session_activation_delay(tab.domain, settings)
+        live_first = settings.prefer_live_chrome_session and _priority_live_session_domain(tab.domain, settings)
 
-        if settings.prefer_live_chrome_session:
+        if live_first:
             if not live_session_available:
                 live_skipped = True
                 live_skip_reason = live_session_unavailable_reason or "live_session_unavailable"
@@ -158,42 +343,26 @@ def extract_single_tab(
                 logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)
             else:
                 live_attempted = True
-                live_content, live_error = extract_from_live_session(
+                live_content, live_error, live_text_char_count, live_rejected_as_too_short = _attempt_live_session(
                     tab,
                     settings,
                     fetched_at,
+                    live_min_chars=live_min_chars,
                     activation_delay_seconds=activation_delay_seconds,
                 )
-                if (
-                    (live_content is None or live_content.text_char_count < live_min_chars)
-                    and settings.live_session_retry_activation_delay_seconds > activation_delay_seconds
-                ):
-                    retry_content, retry_error = extract_from_live_session(
-                        tab,
-                        settings,
-                        fetched_at,
-                        activation_delay_seconds=settings.live_session_retry_activation_delay_seconds,
+                if live_content and live_content.text_char_count >= live_min_chars:
+                    logger.info(
+                        "Live session extraction succeeded for %s (%s chars)",
+                        tab.tab_id,
+                        live_text_char_count,
                     )
-                    if retry_content and (
-                        live_content is None or retry_content.text_char_count >= live_content.text_char_count
-                    ):
-                        live_content = retry_content
-                        live_error = retry_error
+                    live_content.live_session_attempted = True
+                    live_content.live_session_succeeded = True
+                    live_content.live_session_error = live_error
+                    live_content.live_session_text_char_count = live_text_char_count
+                    return live_content
                 if live_content:
-                    live_text_char_count = live_content.text_char_count
-                    if live_content.text_char_count >= live_min_chars:
-                        logger.info(
-                            "Live session extraction succeeded for %s (%s chars)",
-                            tab.tab_id,
-                            live_text_char_count,
-                        )
-                        live_content.live_session_attempted = True
-                        live_content.live_session_succeeded = True
-                        live_content.live_session_error = live_error
-                        live_content.live_session_text_char_count = live_text_char_count
-                        return live_content
                     live_succeeded = True
-                    live_rejected_as_too_short = True
                     logger.info(
                         "Live session extraction too short for %s (%s chars), falling back to HTTP",
                         tab.tab_id,
@@ -201,71 +370,106 @@ def extract_single_tab(
                     )
                 else:
                     logger.info("Live session extraction failed for %s: %s", tab.tab_id, live_error)
+                http_content = _extract_via_http(tab, settings, fetched_at, http_fallback_used=True)
+                return _attach_live_session_metadata(
+                    http_content,
+                    live_attempted=live_attempted,
+                    live_succeeded=live_succeeded,
+                    live_skipped=live_skipped,
+                    live_skip_reason=live_skip_reason,
+                    live_error=live_error,
+                    live_text_char_count=live_text_char_count,
+                    live_rejected_as_too_short=live_rejected_as_too_short,
+                )
 
-        with httpx.Client(
-            follow_redirects=True,
-            timeout=settings.fetch_timeout_seconds,
-            headers={"User-Agent": "chrome-tab-organizer/0.1"},
-        ) as client:
-            response = client.get(str(tab.url))
-        html = response.text
+        if settings.prefer_live_chrome_session and not live_first and _skip_live_session_for_domain(tab.domain, settings):
+            live_skipped = True
+            live_skip_reason = "domain_skip_list"
+            logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)
 
-        extracted = (
-            trafilatura.extract(
-                html,
-                include_comments=False,
-                include_formatting=False,
-                favor_precision=True,
+        http_content = _extract_via_http(tab, settings, fetched_at, http_fallback_used=False)
+        if not _should_attempt_live_session_after_http(tab, http_content, settings):
+            if settings.prefer_live_chrome_session and not live_first:
+                live_skipped = True
+                live_skip_reason = live_skip_reason or "http_content_sufficient"
+            return _attach_live_session_metadata(
+                http_content,
+                live_attempted=live_attempted,
+                live_succeeded=live_succeeded,
+                live_skipped=live_skipped,
+                live_skip_reason=live_skip_reason,
+                live_error=live_error,
+                live_text_char_count=live_text_char_count,
+                live_rejected_as_too_short=live_rejected_as_too_short,
             )
-            if trafilatura is not None
-            else None
+
+        if not settings.prefer_live_chrome_session:
+            return http_content
+        if not live_session_available:
+            live_skipped = True
+            live_skip_reason = live_session_unavailable_reason or "live_session_unavailable"
+            live_error = live_session_unavailable_message
+            return _attach_live_session_metadata(
+                http_content,
+                live_attempted=live_attempted,
+                live_succeeded=live_succeeded,
+                live_skipped=live_skipped,
+                live_skip_reason=live_skip_reason,
+                live_error=live_error,
+                live_text_char_count=live_text_char_count,
+                live_rejected_as_too_short=live_rejected_as_too_short,
+            )
+        if _skip_live_session_for_domain(tab.domain, settings):
+            live_skipped = True
+            live_skip_reason = "domain_skip_list"
+            return _attach_live_session_metadata(
+                http_content,
+                live_attempted=live_attempted,
+                live_succeeded=live_succeeded,
+                live_skipped=live_skipped,
+                live_skip_reason=live_skip_reason,
+                live_error=live_error,
+                live_text_char_count=live_text_char_count,
+                live_rejected_as_too_short=live_rejected_as_too_short,
+            )
+
+        live_attempted = True
+        live_content, live_error, live_text_char_count, live_rejected_as_too_short = _attempt_live_session(
+            tab,
+            settings,
+            fetched_at,
+            live_min_chars=live_min_chars,
+            activation_delay_seconds=activation_delay_seconds,
         )
-        title = tab.title
-        excerpt: str | None = None
-        method = "trafilatura"
-        raw_text = (extracted or "").strip()
-
-        soup: BeautifulSoup | None = None
-        if not raw_text:
-            soup = BeautifulSoup(html, "html.parser")
-            title = (soup.title.string if soup.title and soup.title.string else title).strip()
-            paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
-            raw_text = "\n\n".join(text for text in paragraphs if text)
-            excerpt = next((text[:280] for text in paragraphs if text), None)
-            method = "beautifulsoup_paragraphs"
-
-        if not raw_text:
-            if soup is None:
-                soup = BeautifulSoup(html, "html.parser")
-            body_text = soup.get_text(" ", strip=True)
-            raw_text = body_text[:4000]
-            excerpt = raw_text[:280] if raw_text else None
-            method = "beautifulsoup_body"
-
-        return ExtractedContent(
-            tab_id=tab.tab_id,
-            final_url=_safe_final_url(str(response.url), str(tab.url)),
-            status_code=response.status_code,
-            content_type=response.headers.get("content-type"),
-            title=title[:500],
-            excerpt=excerpt,
-            raw_text=raw_text,
-            text_char_count=len(raw_text),
-            extraction_method=method,
-            live_session_attempted=live_attempted,
-            live_session_succeeded=live_succeeded,
-            live_session_skipped=live_skipped,
-            live_session_skip_reason=live_skip_reason,
-            live_session_error=live_error,
-            live_session_text_char_count=live_text_char_count,
-            live_session_rejected_as_too_short=live_rejected_as_too_short,
-            http_fallback_used=True,
-            fetched_at=fetched_at,
-            error=(
-                f"Non-200 status during HTTP fallback: {response.status_code}"
-                if response.status_code >= 400
-                else None
-            ),
+        if live_content and live_content.text_char_count >= live_min_chars:
+            logger.info(
+                "Live session extraction succeeded for %s (%s chars)",
+                tab.tab_id,
+                live_text_char_count,
+            )
+            live_content.live_session_attempted = True
+            live_content.live_session_succeeded = True
+            live_content.live_session_error = live_error
+            live_content.live_session_text_char_count = live_text_char_count
+            return live_content
+        if live_content:
+            live_succeeded = True
+            logger.info(
+                "Live session extraction too short for %s (%s chars), keeping HTTP result",
+                tab.tab_id,
+                live_text_char_count,
+            )
+        else:
+            logger.info("Live session extraction failed for %s: %s", tab.tab_id, live_error)
+        return _attach_live_session_metadata(
+            http_content,
+            live_attempted=live_attempted,
+            live_succeeded=live_succeeded,
+            live_skipped=live_skipped,
+            live_skip_reason=live_skip_reason,
+            live_error=live_error,
+            live_text_char_count=live_text_char_count,
+            live_rejected_as_too_short=live_rejected_as_too_short,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Extraction failed for %s (%s): %s", tab.tab_id, tab.domain, exc)
@@ -339,7 +543,7 @@ def _capture_live_tab_snapshot_with_retry(
             )
         except subprocess.CalledProcessError as exc:
             reason, message = classify_live_session_error(exc.stderr or exc.stdout or str(exc))
-            if reason in {"tab_index_out_of_range", "window_index_out_of_range"}:
+            if reason in {"appleevent_timed_out", "tab_index_out_of_range", "window_index_out_of_range"}:
                 raise RuntimeError(message) from exc
             last_error = RuntimeError(message)
             if attempt < max_attempts:
