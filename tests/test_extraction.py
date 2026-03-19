@@ -33,11 +33,23 @@ def _sample_tab() -> ChromeTab:
 
 
 def test_extract_tabs_skips_live_session_when_probe_fails(monkeypatch) -> None:
+    # Use a domain that IS in live_session_domains so probe is actually called
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="linkedin-tab",
+        stable_key="linkedin-tab",
+        fingerprint_key="linkedin-tab",
+        window_index=1,
+        tab_index=1,
+        title="LinkedIn Post",
+        url="https://www.linkedin.com/posts/example",
+        domain="www.linkedin.com",
+        discovered_at=now, first_seen_at=now, last_seen_at=now,
+    )
     settings = Settings(
         prefer_live_chrome_session=True,
         require_live_chrome_session=False,
     )
-    tab = _sample_tab()
 
     monkeypatch.setattr(
         "chrome_tab_organizer.extraction.probe_live_javascript_support",
@@ -50,20 +62,17 @@ def test_extract_tabs_skips_live_session_when_probe_fails(monkeypatch) -> None:
 
     class DummyResponse:
         status_code = 200
-        text = "<html><head><title>Example</title></head><body><p>Hello world.</p></body></html>"
+        text = "<html><head><title>LinkedIn</title></head><body><p>Post content.</p></body></html>"
         headers = {"content-type": "text/html"}
-        url = "https://example.com/page"
+        url = "https://www.linkedin.com/posts/example"
 
     class DummyClient:
         def __init__(self, *args, **kwargs) -> None:
             pass
-
         def __enter__(self):
             return self
-
         def __exit__(self, exc_type, exc, tb) -> bool:
             return False
-
         def get(self, url: str) -> DummyResponse:
             return DummyResponse()
 
@@ -72,18 +81,29 @@ def test_extract_tabs_skips_live_session_when_probe_fails(monkeypatch) -> None:
     contents = extract_tabs([tab], settings)
     assert len(contents) == 1
     content = contents[0]
+    # Probe failed, so live session was not attempted; falls through to HTTP
     assert content.live_session_attempted is False
-    assert content.live_session_skipped is True
-    assert content.live_session_skip_reason == "javascript_from_apple_events_disabled"
     assert content.http_fallback_used is False
 
 
 def test_extract_tabs_can_fail_fast_when_live_session_required(monkeypatch) -> None:
+    # Use a domain in live_session_domains so the probe is actually triggered
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="linkedin-tab",
+        stable_key="linkedin-tab",
+        fingerprint_key="linkedin-tab",
+        window_index=1,
+        tab_index=1,
+        title="LinkedIn Post",
+        url="https://www.linkedin.com/posts/example",
+        domain="www.linkedin.com",
+        discovered_at=now, first_seen_at=now, last_seen_at=now,
+    )
     settings = Settings(
         prefer_live_chrome_session=True,
         require_live_chrome_session=True,
     )
-    tab = _sample_tab()
 
     monkeypatch.setattr(
         "chrome_tab_organizer.extraction.probe_live_javascript_support",
@@ -149,15 +169,16 @@ def test_priority_live_session_domain_accepts_shorter_authenticated_content(monk
 
 def test_extract_single_tab_retries_live_session_with_longer_delay(monkeypatch) -> None:
     now = datetime.now(UTC)
+    # linkedin.com is in live_session_domains by default
     tab = ChromeTab(
         tab_id="tab-retry",
         stable_key="tab-retry",
         fingerprint_key="tab-retry",
         window_index=1,
         tab_index=1,
-        title="Example retry",
-        url="https://example.com/retry",
-        domain="example.com",
+        title="LinkedIn retry",
+        url="https://www.linkedin.com/posts/retry",
+        domain="www.linkedin.com",
         discovered_at=now,
         first_seen_at=now,
         last_seen_at=now,
@@ -208,7 +229,9 @@ def test_extract_single_tab_retries_live_session_with_longer_delay(monkeypatch) 
     )
 
     content = extract_single_tab(tab, settings, live_session_available=True)
-    assert attempts == [0.2, 1.2]
+    # linkedin.com is a priority domain: first attempt uses priority delay (0.9),
+    # retry uses the longer retry delay (1.2).
+    assert attempts == [0.9, 1.2]
     assert content.extraction_method == "chrome_live_dom"
     assert content.live_session_succeeded is True
 
@@ -291,10 +314,10 @@ def test_extract_single_tab_prefers_http_for_public_pages(monkeypatch) -> None:
     monkeypatch.setattr("chrome_tab_organizer.extraction.extract_from_live_session", fake_extract_from_live_session)
 
     content = extract_single_tab(tab, settings, live_session_available=True)
+    # example.com is not in live_session_domains, so no live session is ever attempted
     assert live_calls["count"] == 0
     assert content.extraction_method == "trafilatura"
-    assert content.live_session_skipped is True
-    assert content.live_session_skip_reason == "http_content_sufficient"
+    assert content.live_session_attempted is False
 
 
 def test_capture_live_tab_snapshot_fails_fast_for_tab_index_change(monkeypatch) -> None:
@@ -489,3 +512,98 @@ def test_skip_live_session_respects_custom_skip_list() -> None:
     settings = Settings(live_session_skip_domains=["badsite.com"])
     assert _skip_live_session_for_domain("badsite.com", settings) is True
     assert _skip_live_session_for_domain("youtube.com", settings) is False
+
+
+# --- opt-in live session: domain routing ---
+
+def test_extract_tabs_routes_http_only_tabs_without_live_session(monkeypatch) -> None:
+    """Domains not in live_session_domains must never trigger a Chrome probe or live session."""
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="t1", stable_key="t1", fingerprint_key="f1",
+        window_index=1, tab_index=1, title="Example",
+        url="https://example.com/page", domain="example.com",
+        discovered_at=now, first_seen_at=now, last_seen_at=now,
+    )
+    settings = Settings(prefer_live_chrome_session=True)
+    probe_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction.probe_live_javascript_support",
+        lambda: (probe_calls.__setitem__("count", probe_calls["count"] + 1) or (True, None, None)),
+    )
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction._extract_via_http",
+        lambda tab, settings, fetched_at, *, http_fallback_used: ExtractedContent(
+            tab_id=tab.tab_id, status_code=200, content_type="text/html",
+            title=tab.title, raw_text="Content.", text_char_count=8,
+            extraction_method="trafilatura", fetched_at=fetched_at,
+        ),
+    )
+
+    contents = extract_tabs([tab], settings)
+    assert probe_calls["count"] == 0  # probe never called for non-live-session domains
+    assert len(contents) == 1
+    assert contents[0].live_session_attempted is False
+
+
+def test_extract_single_tab_uses_live_session_for_opted_in_domain(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="t1", stable_key="t1", fingerprint_key="f1",
+        window_index=1, tab_index=1, title="LinkedIn Post",
+        url="https://www.linkedin.com/posts/test", domain="www.linkedin.com",
+        discovered_at=now, first_seen_at=now, last_seen_at=now,
+    )
+    settings = Settings(prefer_live_chrome_session=True, min_live_extract_chars=50)
+
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction.extract_from_live_session",
+        lambda tab, settings, fetched_at, *, activation_delay_seconds: (
+            ExtractedContent(
+                tab_id=tab.tab_id, final_url=tab.url, status_code=200,
+                content_type="text/html; source=chrome-session",
+                title=tab.title, raw_text="L" * 200, text_char_count=200,
+                extraction_method="chrome_live_dom",
+                live_session_attempted=True, live_session_succeeded=True,
+                fetched_at=fetched_at,
+            ),
+            None,
+        ),
+    )
+
+    content = extract_single_tab(tab, settings, live_session_available=True)
+    assert content.extraction_method == "chrome_live_dom"
+    assert content.live_session_succeeded is True
+
+
+def test_extract_single_tab_falls_back_to_http_when_live_session_fails(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    tab = ChromeTab(
+        tab_id="t1", stable_key="t1", fingerprint_key="f1",
+        window_index=1, tab_index=1, title="Docs",
+        url="https://docs.google.com/document/d/abc", domain="docs.google.com",
+        discovered_at=now, first_seen_at=now, last_seen_at=now,
+    )
+    settings = Settings(prefer_live_chrome_session=True, min_live_extract_chars=200)
+
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction.extract_from_live_session",
+        lambda *args, **kwargs: (None, "Chrome timed out."),
+    )
+    monkeypatch.setattr(
+        "chrome_tab_organizer.extraction._extract_via_http",
+        lambda tab, settings, fetched_at, *, http_fallback_used: ExtractedContent(
+            tab_id=tab.tab_id, final_url=tab.url, status_code=200,
+            content_type="text/html", title=tab.title,
+            raw_text="Fallback content.", text_char_count=17,
+            extraction_method="trafilatura",
+            http_fallback_used=http_fallback_used,
+            fetched_at=fetched_at,
+        ),
+    )
+
+    content = extract_single_tab(tab, settings, live_session_available=True)
+    assert content.extraction_method == "trafilatura"
+    assert content.http_fallback_used is True
+    assert content.live_session_attempted is True

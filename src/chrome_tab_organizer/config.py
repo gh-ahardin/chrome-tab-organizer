@@ -25,8 +25,19 @@ class Settings(BaseModel):
     max_concurrency: int = 8
     llm_max_concurrency: int = 4
     llm_max_input_chars: int = 12000
-    prefer_live_chrome_session: bool = True
-    require_live_chrome_session: bool = False
+    # --- live session (opt-in model) ---
+    # Domains listed here will use live Chrome session extraction (AppleScript).
+    # All other domains use HTTP-only extraction. Set to an empty list to disable
+    # live session entirely. Previously controlled by prefer_live_chrome_session.
+    live_session_domains: list[str] = Field(
+        default_factory=lambda: [
+            "linkedin.com",
+            "www.linkedin.com",
+            "sharepoint.com",
+            "docs.google.com",
+            "drive.google.com",
+        ]
+    )
     session_extract_timeout_seconds: float = 8.0
     session_extract_attempts: int = 3
     live_extract_tab_pause_seconds: float = 0.1
@@ -45,6 +56,7 @@ class Settings(BaseModel):
             "youtu.be",
         ]
     )
+    # Kept for backward compatibility; superseded by live_session_domains.
     live_session_priority_domains: list[str] = Field(
         default_factory=lambda: [
             "linkedin.com",
@@ -56,6 +68,10 @@ class Settings(BaseModel):
             "drive.google.com",
         ]
     )
+    # Legacy fields preserved so existing .env files keep working.
+    # When set, prefer_live_chrome_session=False disables live session for all domains.
+    prefer_live_chrome_session: bool = True
+    require_live_chrome_session: bool = False
     include_domains: list[str] = Field(default_factory=list)
     exclude_domains: list[str] = Field(default_factory=list)
     priority_keywords: list[str] = Field(
@@ -99,6 +115,7 @@ class Settings(BaseModel):
             "max_concurrency": "CTO_MAX_CONCURRENCY",
             "llm_max_concurrency": "CTO_LLM_MAX_CONCURRENCY",
             "llm_max_input_chars": "CTO_LLM_MAX_INPUT_CHARS",
+            "live_session_domains": "CTO_LIVE_SESSION_DOMAINS",
             "prefer_live_chrome_session": "CTO_PREFER_LIVE_CHROME_SESSION",
             "require_live_chrome_session": "CTO_REQUIRE_LIVE_CHROME_SESSION",
             "session_extract_timeout_seconds": "CTO_SESSION_EXTRACT_TIMEOUT_SECONDS",
@@ -141,6 +158,7 @@ class Settings(BaseModel):
     @field_validator(
         "include_domains",
         "exclude_domains",
+        "live_session_domains",
         "live_session_skip_domains",
         "live_session_priority_domains",
         "priority_keywords",

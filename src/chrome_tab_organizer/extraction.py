@@ -256,57 +256,65 @@ def _attempt_live_session(
 
 
 def extract_tabs(tabs: list[ChromeTab], settings: Settings) -> list[ExtractedContent]:
-    live_session_available = settings.prefer_live_chrome_session
-    live_session_unavailable_reason: str | None = None
-    live_session_unavailable_message: str | None = None
+    """Extract content for a list of tabs.
 
-    if settings.prefer_live_chrome_session:
-        (
-            live_session_available,
-            live_session_unavailable_reason,
-            live_session_unavailable_message,
-        ) = probe_live_javascript_support()
+    Tabs in ``settings.live_session_domains`` are extracted serially via live
+    Chrome session (AppleScript) and run first. All other tabs are extracted
+    concurrently via HTTP. This avoids waking Chrome tabs unnecessarily.
+    """
+    effective_live_domains = settings.live_session_domains if settings.prefer_live_chrome_session else []
+
+    live_tabs = [t for t in tabs if _domain_matches(t.domain, effective_live_domains)]
+    http_tabs = [t for t in tabs if not _domain_matches(t.domain, effective_live_domains)]
+
+    # Probe once if any live-session tabs exist
+    live_session_available = False
+    if live_tabs:
+        live_session_available, unavailable_reason, unavailable_message = probe_live_javascript_support()
         if not live_session_available:
             if settings.require_live_chrome_session:
-                raise RuntimeError(
-                    live_session_unavailable_message or "Live Chrome session extraction is unavailable."
-                )
+                raise RuntimeError(unavailable_message or "Live Chrome session extraction is unavailable.")
             logger.warning(
-                "Live Chrome session extraction unavailable for this run: %s",
-                live_session_unavailable_message or live_session_unavailable_reason,
+                "Live Chrome session unavailable; falling back to HTTP for all tabs: %s",
+                unavailable_message or unavailable_reason,
             )
 
-    if settings.prefer_live_chrome_session:
-        contents: list[ExtractedContent] = []
-        for index, tab in enumerate(tabs):
-            if index > 0 and settings.live_extract_tab_pause_seconds > 0:
-                time.sleep(settings.live_extract_tab_pause_seconds)
-            if index and index % 25 == 0:
-                logger.info("Extraction progress: %s/%s tabs", index, len(tabs))
-            contents.append(
-                extract_single_tab(
-                    tab,
-                    settings,
-                    live_session_available=live_session_available,
-                    live_session_unavailable_reason=live_session_unavailable_reason,
-                    live_session_unavailable_message=live_session_unavailable_message,
-                )
-            )
-        return contents
-    with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_concurrency) as executor:
-        futures = [executor.submit(extract_single_tab, tab, settings) for tab in tabs]
-        return [future.result() for future in concurrent.futures.as_completed(futures)]
+    # HTTP tabs: fully concurrent
+    http_results: list[ExtractedContent] = []
+    if http_tabs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_concurrency) as executor:
+            futures = [
+                executor.submit(extract_single_tab, tab, settings, live_session_available=False)
+                for tab in http_tabs
+            ]
+            http_results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    # Live session tabs: serial to avoid Chrome memory pressure
+    live_results: list[ExtractedContent] = []
+    for index, tab in enumerate(live_tabs):
+        if index > 0 and settings.live_extract_tab_pause_seconds > 0:
+            time.sleep(settings.live_extract_tab_pause_seconds)
+        live_results.append(
+            extract_single_tab(tab, settings, live_session_available=live_session_available)
+        )
+
+    return http_results + live_results
 
 
 def extract_single_tab(
     tab: ChromeTab,
     settings: Settings,
     *,
-    live_session_available: bool = True,
-    live_session_unavailable_reason: str | None = None,
-    live_session_unavailable_message: str | None = None,
+    live_session_available: bool = False,
 ) -> ExtractedContent:
+    """Extract content for a single tab.
+
+    If ``live_session_available`` is True and the tab's domain is in
+    ``settings.live_session_domains``, live Chrome session extraction is
+    attempted first with HTTP as a fallback. Otherwise HTTP only.
+    """
     fetched_at = datetime.now(UTC)
+
     if not _domain_allowed(tab.domain, settings):
         return ExtractedContent(
             tab_id=tab.tab_id,
@@ -320,157 +328,48 @@ def extract_single_tab(
             error="Skipped by domain filter.",
         )
 
+    use_live = (
+        live_session_available
+        and _domain_matches(tab.domain, settings.live_session_domains)
+        and not _skip_live_session_for_domain(tab.domain, settings)
+    )
+
     try:
-        live_attempted = False
-        live_succeeded = False
-        live_skipped = False
-        live_skip_reason: str | None = None
-        live_error: str | None = None
-        live_text_char_count = 0
-        live_rejected_as_too_short = False
-        live_min_chars = _live_session_min_chars(tab.domain, settings)
-        activation_delay_seconds = _live_session_activation_delay(tab.domain, settings)
-        live_first = settings.prefer_live_chrome_session and _priority_live_session_domain(tab.domain, settings)
-
-        if live_first:
-            if not live_session_available:
-                live_skipped = True
-                live_skip_reason = live_session_unavailable_reason or "live_session_unavailable"
-                live_error = live_session_unavailable_message
-            elif _skip_live_session_for_domain(tab.domain, settings):
-                live_skipped = True
-                live_skip_reason = "domain_skip_list"
-                logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)
+        if use_live:
+            activation_delay = _live_session_activation_delay(tab.domain, settings)
+            live_min_chars = _live_session_min_chars(tab.domain, settings)
+            live_content, live_error, live_char_count, live_too_short = _attempt_live_session(
+                tab, settings, fetched_at,
+                live_min_chars=live_min_chars,
+                activation_delay_seconds=activation_delay,
+            )
+            if live_content and live_content.text_char_count >= live_min_chars:
+                logger.info("Live session succeeded for %s (%s chars)", tab.tab_id, live_char_count)
+                live_content.live_session_attempted = True
+                live_content.live_session_succeeded = True
+                live_content.live_session_text_char_count = live_char_count
+                return live_content
+            if live_content:
+                logger.info(
+                    "Live session too short for %s (%s chars), falling back to HTTP",
+                    tab.tab_id, live_char_count,
+                )
             else:
-                live_attempted = True
-                live_content, live_error, live_text_char_count, live_rejected_as_too_short = _attempt_live_session(
-                    tab,
-                    settings,
-                    fetched_at,
-                    live_min_chars=live_min_chars,
-                    activation_delay_seconds=activation_delay_seconds,
-                )
-                if live_content and live_content.text_char_count >= live_min_chars:
-                    logger.info(
-                        "Live session extraction succeeded for %s (%s chars)",
-                        tab.tab_id,
-                        live_text_char_count,
-                    )
-                    live_content.live_session_attempted = True
-                    live_content.live_session_succeeded = True
-                    live_content.live_session_error = live_error
-                    live_content.live_session_text_char_count = live_text_char_count
-                    return live_content
-                if live_content:
-                    live_succeeded = True
-                    logger.info(
-                        "Live session extraction too short for %s (%s chars), falling back to HTTP",
-                        tab.tab_id,
-                        live_text_char_count,
-                    )
-                else:
-                    logger.info("Live session extraction failed for %s: %s", tab.tab_id, live_error)
-                http_content = _extract_via_http(tab, settings, fetched_at, http_fallback_used=True)
-                return _attach_live_session_metadata(
-                    http_content,
-                    live_attempted=live_attempted,
-                    live_succeeded=live_succeeded,
-                    live_skipped=live_skipped,
-                    live_skip_reason=live_skip_reason,
-                    live_error=live_error,
-                    live_text_char_count=live_text_char_count,
-                    live_rejected_as_too_short=live_rejected_as_too_short,
-                )
-
-        if settings.prefer_live_chrome_session and not live_first and _skip_live_session_for_domain(tab.domain, settings):
-            live_skipped = True
-            live_skip_reason = "domain_skip_list"
-            logger.info("Skipping live session extraction for %s (%s)", tab.tab_id, tab.domain)
-
-        http_content = _extract_via_http(tab, settings, fetched_at, http_fallback_used=False)
-        if not _should_attempt_live_session_after_http(tab, http_content, settings):
-            if settings.prefer_live_chrome_session and not live_first:
-                live_skipped = True
-                live_skip_reason = live_skip_reason or "http_content_sufficient"
+                logger.info("Live session failed for %s: %s", tab.tab_id, live_error)
+            http_content = _extract_via_http(tab, settings, fetched_at, http_fallback_used=True)
             return _attach_live_session_metadata(
                 http_content,
-                live_attempted=live_attempted,
-                live_succeeded=live_succeeded,
-                live_skipped=live_skipped,
-                live_skip_reason=live_skip_reason,
+                live_attempted=True,
+                live_succeeded=bool(live_content),
+                live_skipped=False,
+                live_skip_reason=None,
                 live_error=live_error,
-                live_text_char_count=live_text_char_count,
-                live_rejected_as_too_short=live_rejected_as_too_short,
+                live_text_char_count=live_char_count,
+                live_rejected_as_too_short=live_too_short,
             )
 
-        if not settings.prefer_live_chrome_session:
-            return http_content
-        if not live_session_available:
-            live_skipped = True
-            live_skip_reason = live_session_unavailable_reason or "live_session_unavailable"
-            live_error = live_session_unavailable_message
-            return _attach_live_session_metadata(
-                http_content,
-                live_attempted=live_attempted,
-                live_succeeded=live_succeeded,
-                live_skipped=live_skipped,
-                live_skip_reason=live_skip_reason,
-                live_error=live_error,
-                live_text_char_count=live_text_char_count,
-                live_rejected_as_too_short=live_rejected_as_too_short,
-            )
-        if _skip_live_session_for_domain(tab.domain, settings):
-            live_skipped = True
-            live_skip_reason = "domain_skip_list"
-            return _attach_live_session_metadata(
-                http_content,
-                live_attempted=live_attempted,
-                live_succeeded=live_succeeded,
-                live_skipped=live_skipped,
-                live_skip_reason=live_skip_reason,
-                live_error=live_error,
-                live_text_char_count=live_text_char_count,
-                live_rejected_as_too_short=live_rejected_as_too_short,
-            )
+        return _extract_via_http(tab, settings, fetched_at, http_fallback_used=False)
 
-        live_attempted = True
-        live_content, live_error, live_text_char_count, live_rejected_as_too_short = _attempt_live_session(
-            tab,
-            settings,
-            fetched_at,
-            live_min_chars=live_min_chars,
-            activation_delay_seconds=activation_delay_seconds,
-        )
-        if live_content and live_content.text_char_count >= live_min_chars:
-            logger.info(
-                "Live session extraction succeeded for %s (%s chars)",
-                tab.tab_id,
-                live_text_char_count,
-            )
-            live_content.live_session_attempted = True
-            live_content.live_session_succeeded = True
-            live_content.live_session_error = live_error
-            live_content.live_session_text_char_count = live_text_char_count
-            return live_content
-        if live_content:
-            live_succeeded = True
-            logger.info(
-                "Live session extraction too short for %s (%s chars), keeping HTTP result",
-                tab.tab_id,
-                live_text_char_count,
-            )
-        else:
-            logger.info("Live session extraction failed for %s: %s", tab.tab_id, live_error)
-        return _attach_live_session_metadata(
-            http_content,
-            live_attempted=live_attempted,
-            live_succeeded=live_succeeded,
-            live_skipped=live_skipped,
-            live_skip_reason=live_skip_reason,
-            live_error=live_error,
-            live_text_char_count=live_text_char_count,
-            live_rejected_as_too_short=live_rejected_as_too_short,
-        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Extraction failed for %s (%s): %s", tab.tab_id, tab.domain, exc)
         return ExtractedContent(
